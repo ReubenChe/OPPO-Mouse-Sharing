@@ -1,0 +1,40 @@
+# 构建产物
+src/dist/
+artifacts/
+*.exe
+*.dll
+*.pdb
+*.zip
+
+# 本地偏好设置与运行数据（包括直接运行脚本时生成的文件）
+settings.json
+settings.json.*
+state.json
+state.json.*
+connection.json
+connection.json.*
+stop.request
+*.log
+*.tmp
+*.bak
+.local-data/
+runtime/
+validation-data/
+
+# 私人客户端配置、抓包及提取的原厂文件
+config.json
+*.asar
+*.apk
+*.pcap
+*.pcapng
+.env
+.env.*
+!.env.example
+
+# 编辑器与操作系统生成的文件
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
