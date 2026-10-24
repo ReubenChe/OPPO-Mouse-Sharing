@@ -259,7 +259,46 @@ internal sealed class SharingSession
 
 internal static class Backend
 {
-    private const string Install = @"C:\Program Files\Oppo Connect";
+    internal static string FindClientInstall()
+    {
+        var processes = Process.GetProcessesByName("O+Connect");
+        try
+        {
+            if (processes.Length == 0) throw new IOException("未检测到正在运行的 OPPO 互联客户端，请先打开客户端并连接手机。");
+            var paths = new List<string>();
+            int session;
+            using (var current = Process.GetCurrentProcess()) session = current.SessionId;
+            foreach (var process in processes)
+            {
+                try
+                {
+                    if (process.SessionId == session) paths.Add(process.MainModule.FileName);
+                }
+                // Electron 子进程可能已退出，或不允许查询；继续检查其他进程。
+                catch (System.ComponentModel.Win32Exception) { }
+                catch (InvalidOperationException) { }
+                catch (NotSupportedException) { }
+            }
+            return ResolveClientInstall(paths);
+        }
+        finally { foreach (var process in processes) process.Dispose(); }
+    }
+    internal static string ResolveClientInstall(IEnumerable<string> executablePaths)
+    {
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string executable in executablePaths)
+        {
+            if (String.IsNullOrWhiteSpace(executable) || !Path.IsPathRooted(executable)) continue;
+            string directory = Path.GetDirectoryName(executable);
+            if (File.Exists(Path.Combine(directory, "resources", "app.asar")) &&
+                File.Exists(Path.Combine(directory, "app_process", "screenshare.exe"))) directories.Add(directory);
+        }
+        if (directories.Count == 0)
+            throw new IOException("无法从当前用户的 OPPO 互联进程读取完整安装目录，请确认客户端正常运行、权限一致，且 resources/app.asar 与 app_process/screenshare.exe 存在。");
+        if (directories.Count > 1)
+            throw new IOException("检测到多个不同安装目录的 OPPO 互联客户端，请仅保留一个客户端运行后重试。");
+        return directories.Single();
+    }
     internal static string Root { get { return Environment.GetEnvironmentVariable("OPPO_MOUSE_SHARING_DATA") ?? Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName); } }
     internal static bool Alive(int pid)
     {
@@ -350,7 +389,8 @@ internal static class Backend
         try
         {
             session.Set("phase", "starting");
-            string clientVersion = InstalledVersion(Path.Combine(Install, "resources", "app.asar"));
+            string install = FindClientInstall();
+            string clientVersion = InstalledVersion(Path.Combine(install, "resources", "app.asar"));
             session.Set("clientVersion", clientVersion, "clientVersionVerified", clientVersion == "16.2.20");
             var existing = Process.GetProcessesByName("screenshare");
             bool occupied = existing.Length != 0; foreach (var process in existing) process.Dispose();
@@ -364,8 +404,8 @@ internal static class Backend
                 "remote_device_type", Json.Get(phone, "deviceType"), "remote_device_name", Json.Get(phone, "deviceName"),
                 "remote_device_ip", config["host"], "remote_device_id", config["id"], "connection_type", Json.Get(phone, "connectType"),
                 "local_device_type", 1, "local_device_id", Json.Get(local, "oafDeviceId"), "local_device_name", Json.Get(local, "deviceName"), "local_ip", localIp)) parameters[entry.Key] = entry.Value;
-            native = Process.Start(new ProcessStartInfo(Path.Combine(Install, "app_process", "screenshare.exe"), "0") {
-                WorkingDirectory = Path.Combine(Install, "app_process"), UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
+            native = Process.Start(new ProcessStartInfo(Path.Combine(install, "app_process", "screenshare.exe"), "0") {
+                WorkingDirectory = Path.Combine(install, "app_process"), UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
             bool ready = false;
             for (int attempt = 0; attempt < 20; attempt++)
             {

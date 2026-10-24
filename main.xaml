@@ -52,8 +52,11 @@
    <Grid.ColumnDefinitions><ColumnDefinition Width="244" /><ColumnDefinition Width="24" /><ColumnDefinition /></Grid.ColumnDefinitions>
    <StackPanel>
     <StackPanel Orientation="Horizontal" Margin="0,0,0,1">
-     <Image x:Name="BrandMark" Width="34" Height="34" Margin="0,0,10,0" RenderOptions.BitmapScalingMode="HighQuality" />
-     <TextBlock Text="键鼠共享" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center" />
+     <Image x:Name="BrandMark" Width="34" Height="34" Margin="0,0,10,0" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
+     <!-- 中文字形的可见中心略低于行框中心，向上微调以与 Logo 视觉居中。 -->
+     <TextBlock Text="键鼠共享" FontSize="26" FontWeight="SemiBold" VerticalAlignment="Center">
+      <TextBlock.RenderTransform><TranslateTransform Y="-2" /></TextBlock.RenderTransform>
+     </TextBlock>
     </StackPanel>
     <Border x:Name="DeviceCard" Background="#F7F7F7" BorderBrush="#E4E4E4" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,13,16,0">
      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="28" /><ColumnDefinition /></Grid.ColumnDefinitions>

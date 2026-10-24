@@ -12,8 +12,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("OPPO 键鼠共享助手")]
 [assembly: AssemblyDescription("键鼠共享助手与 C# 原生后端")]
 [assembly: AssemblyProduct("OPPO Mouse Sharing")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.3.1.0")]
+[assembly: AssemblyFileVersion("1.3.1.0")]
 
 internal static class Launcher
 {

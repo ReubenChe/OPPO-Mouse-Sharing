@@ -33,7 +33,7 @@
 `Toggle-Sharing` 保存偏好、移除旧停止请求，启动 `--backend <界面 PID>`。`Backend.Share` 依次执行：
 
 1. 写入 `starting` 状态。
-2. 从已安装客户端 `resources/app.asar` 读取 `package.json` 版本，将版本和是否为已验证的 `16.2.20` 写入状态文件；版本不匹配时继续运行，由界面显示一次兼容性提示。
+2. 枚举当前 Windows 会话内的 `O+Connect` 进程，从可执行文件路径识别安装目录，检查 `resources/app.asar` 与 `app_process/screenshare.exe`；同目录子进程去重，跳过已退出或无法读取路径的进程。未找到完整目录或存在多个不同的完整目录时提示错误，不回退到固定盘符。每次启用共享重新识别，并共用该目录读取版本、启动原生模块和设置工作目录。从 `resources/app.asar` 读取 `package.json` 版本，将版本和是否为已验证的 `16.2.20` 写入状态文件；版本不匹配时继续运行，由界面显示一次兼容性提示。
 3. 如果系统中已有名为 `screenshare` 的进程，拒绝启动，避免冲突。
 4. 只读解析 `%APPDATA%\O+Connect\config.json`。以 `CurrentConnectedDevice` 匹配 `devicesList` 中设备 ID 的冒号前缀，读取设备信息和本机身份，验证手机地址为数字 IP。
 5. 经 `dspipc /get_channel_local_ip` 获取电脑互联地址，组装共享参数。
