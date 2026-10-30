@@ -14,9 +14,10 @@
 | `--connection-once` | `Backend.QueryConnection` | 单次查询，内部诊断用途；GUI EXE 不保证终端直接显示输出 |
 | `--self-test` | `SelfTest` → `助手.ps1 -ValidateOnly` | 仅界面与左右布局自检 |
 | `--start-sharing` | 正常界面，转交 `-StartSharing` | 界面首次渲染后请求启用共享 |
+| `--startup` | 正常界面，转交 `-StartInTray` | Windows 登录启动，在托盘中运行；是否自动启用共享由主页偏好决定 |
 | `--fixture-*` | `Backend.Fixture` | 保留的离线测试桩，需 `OPPO_MOUSE_SHARING_FIXTURE=1` |
 
-正常入口使用 `Local\OppoMouseSharingExe` 互斥锁。`PrepareRuntime` 计算内嵌 ZIP 的 SHA-256 前 16 位作为资源目录名，按明确的五文件白名单释放，写入 `complete` 标记。复用缓存时仅检查标记和文件存在性；资源摘要不等于缓存文件完整性校验或签名。
+正常入口使用 `Local\OppoMouseSharingExe` 互斥锁。`PrepareRuntime` 计算内嵌 ZIP 的 SHA-256 前 16 位作为资源目录名，按明确的六文件白名单释放（包括 `settings.xaml`），写入 `complete` 标记。复用缓存时仅检查标记和文件存在性；资源摘要不等于缓存文件完整性校验或签名。`--startup` 在已有实例时静默退出。
 
 随后启动系统 `powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File 助手.ps1` 并等待退出。启动器给子进程传入 `OPPO_MOUSE_SHARING_EXE` 和 `OPPO_MOUSE_SHARING_DATA`。若用户数据目录还没有设置，启动器可能从 EXE 同目录迁移一个小于 64 KiB 的 `settings.json`；不会迁移运行状态。
 
@@ -27,6 +28,10 @@
 界面启动一个同 EXE 的 `--connection-watch <界面 PID>` 进程。`Backend.Watch` 在父进程存活期间循环调用 `QueryConnection`，每轮查询后等待 2 秒；单次请求超时为 1 秒。请求 `dspipc` 的 `/get_remote_device`，按业务状态 `0` 与 `device_id` 判断连接。输出只包含连接阶段、设备名称、连接方式、PID 和时间，不包含该接口返回的完整设备对象。
 
 界面每 350 ms 读取 `connection.json`：校验 watcher PID，拒绝超过 7 秒或未来超过 2 秒的状态。共享状态文件也匹配当前共享后端 PID，防止上次运行的状态混入当前显示。
+
+`autoShareOnConnect` 默认为 `false`，与方向、关闭偏好和版本提示记录一起保存。每次明确的设备连接最多自动启动一次；手动停止或启动失败后等待下一次明确断开、重连。查询暂时不可用不重置尝试标记；旧后端仍在退出时保留新连接的启动机会，等进程退出且按钮恢复可用后再启动。用户重新打开自动共享开关会产生一次新的启动机会。自动共享复用 `Toggle-Sharing`，不改变原生键鼠共享状态机。
+
+设置窗口的开机自启动读取当前用户 `Software\Microsoft\Windows\CurrentVersion\Run` 中的 `OppoMouseSharing` 值；开启写入带引号的 EXE 绝对路径及 `--startup`，关闭只删除该值，不写机器级启动项。界面从注册表读取实际注册状态，不在 JSON 中维护另一份启动项布尔值。
 
 ## 启用共享
 
@@ -115,7 +120,7 @@ local_device_type, local_device_id, local_device_name, local_ip
 
 | 文件 | 写入者 | 读取者 / 用途 |
 | --- | --- | --- |
-| `settings.json` | 界面 | 界面及共享后端；方向、关闭偏好与已提醒的客户端版本 |
+| `settings.json` | 界面 | 界面及共享后端；方向、关闭偏好、自动共享与已提醒的客户端版本 |
 | `connection.json` | 查询进程 | 界面；基础连接显示 |
 | `state.json` | 共享后端 | 界面；阶段、消息、设备名、计数与 PID |
 | `stop.request` | 界面 | 共享后端；请求停止 |
@@ -123,7 +128,7 @@ local_device_type, local_device_id, local_device_name, local_ip
 
 JSON 通过临时文件和替换操作写入。共享后端每次队列等待最多 250 ms，并约每 2 秒核对连接设备；IPC 等待期间整体响应时间可能更长。正常停止、父界面退出、原生进程退出、超时或设备变化都会进入清理：先发布 `stopping`，关闭边缘触发，尝试正常停止共享，关闭事件管道，必要时终止本次创建的原生进程，删除停止文件，发布 `stopped` 或 `error`。
 
-界面“退出”在后端运行时先写停止请求，等待后端退出再关闭窗口；“最小化到托盘”继续运行。界面清理阶段停止定时器并释放托盘与查询进程。程序没有安装系统服务或开机启动任务。
+界面“退出”在后端运行时先写停止请求，等待后端退出再关闭窗口；“最小化到托盘”继续运行。界面清理阶段停止定时器并释放托盘与查询进程。程序不安装系统服务；用户可在设置中启用当前用户的 Windows 登录启动项。
 
 ## 验证边界
 

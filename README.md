@@ -13,6 +13,8 @@
 - 分别显示基础互联连接状态与键鼠共享状态。
 - 托盘中启停共享、切换方向、恢复窗口和退出。
 - 保存方向与关闭窗口时的托盘偏好。
+- 右上角设置中可开启开机自启动，登录 Windows 后在托盘中运行。
+- 开启“连接设备后自动共享”后，在检测到设备连接时自动启用共享。
 - 使用 C# 后端与 PowerShell/WPF 界面。
 
 ## 运行条件与兼容性
@@ -40,6 +42,10 @@ Oppo互联官网：[OPPO 互联 - OPPO一加手机平板与电脑、iPhone互联
 
 切换方向前先将指针移回电脑。最小化到托盘后共享继续运行；双击托盘图标恢复，右键菜单可停止共享或退出。
 
+主页“启用共享”按钮上方可开启“连接设备后自动共享”。开启时设备已经连接也会生效；自动启用后仍按所选屏幕边缘穿越到手机。手动停止或启动失败后，同一次连接内不会反复自动启动，设备断开再连接时会重新尝试。关闭此开关不会停止正在进行的共享。开关默认关闭，偏好会保存。
+
+右上角齿轮打开设置。“开机自启动”使用当前用户的 Windows 登录启动项，不需要管理员权限；开启后请保留 EXE 的存放位置，移动 EXE 后需在新位置重新开启。开机自启动与自动共享可分别设置。
+
 ## 代码结构与执行链路
 
 ```text
@@ -52,6 +58,7 @@ Oppo互联官网：[OPPO 互联 - OPPO一加手机平板与电脑、iPhone互联
 ├── 界面.ps1             # WPF 事件、托盘、偏好、子进程与状态刷新
 ├── main.xaml            # 主界面
 ├── close.xaml           # 关闭提醒
+├── settings.xaml        # 设置窗口
 ├── app.ico              # 与 assets/app-icon-green.png 对应的多尺寸图标
 ├── assets/              # 绿色图标 PNG 与来源说明
 ├── docs/                # 架构与执行链路说明
@@ -60,7 +67,7 @@ Oppo互联官网：[OPPO 互联 - OPPO一加手机平板与电脑、iPhone互联
 
 ```mermaid
 flowchart TD
-    EXE[EXE / Launcher.Main] --> Extract[释放五个资源至用户 runtime 目录]
+    EXE[EXE / Launcher.Main] --> Extract[释放六个资源至用户 runtime 目录]
     Extract --> PS[助手.ps1 → 界面.ps1 / WPF 与托盘]
     PS --> Watch[同一 EXE --connection-watch]
     Watch --> DSP[dspipc / 查询基础连接]
@@ -111,6 +118,8 @@ EXE 默认将资源和运行数据写入：
 | 无法启动 | 查看 `launcher-error.log` 与数据目录下的 `ui-error.log`，提交前脱敏 |
 
 ## 参与贡献
+
+本地构建：`powershell -NoProfile -ExecutionPolicy Bypass -File src/build.ps1`，输出在 `artifacts/OPPO-Mouse-sharing.exe`。新增设置与自动共享验证：`powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/Test-Preferences.ps1`；测试使用临时后端和独立注册表键，不接触实际启动项或 OPPO 会话。
 
 见 [贡献指南](CONTRIBUTING.md) 和 [安全问题说明](SECURITY.md)。仓库仅公开应用源码、图标资源与必要文档。
 

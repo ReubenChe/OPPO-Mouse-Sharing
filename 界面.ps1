@@ -1,4 +1,4 @@
-﻿param([switch]$ValidateOnly, [switch]$StartSharing)
+﻿param([switch]$ValidateOnly, [switch]$StartSharing, [switch]$StartInTray)
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $helperRoot = $PSScriptRoot
@@ -16,7 +16,13 @@ $script:helperClosing = $false
 $script:selectedDirection = 'right'
 $script:lastStateUpdate = ''
 $script:startupShareRequested = [bool]$StartSharing
+$script:startupTrayRequested = [bool]$StartInTray
 $script:closeToTray = $false
+$script:autoShareOnConnect = $false
+$script:autoShareAttempted = $false
+$script:connectionPhase = 'unavailable'
+$script:startupRegistrySubKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
+$script:startupRegistryName = 'OppoMouseSharing'
 $script:warnedClientVersions = @()
 $script:trayIcon = $null
 $script:trayMenu = $null
@@ -33,6 +39,7 @@ try {
     $saved = Get-Content -LiteralPath $helperSettingsPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
     if ($saved.direction -in @('left','right')) { $script:selectedDirection = $saved.direction }
     if ($saved.closeToTray -is [bool]) { $script:closeToTray = $saved.closeToTray }
+    if ($saved.autoShareOnConnect -is [bool]) { $script:autoShareOnConnect = $saved.autoShareOnConnect }
     $script:warnedClientVersions = @($saved.warnedClientVersions | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
 } catch {}
 [xml]$xaml = [IO.File]::ReadAllText((Join-Path $helperRoot 'main.xaml'))
@@ -44,7 +51,7 @@ if (Test-Path -LiteralPath (Join-Path $helperRoot 'app.ico')) {
     $window.Icon = $script:brandSource
     $window.FindName('BrandMark').Source = $script:brandSource
 }
-foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','DirectionHint')) {
+foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','DirectionHint','SettingsButton','AutoShareSwitch')) {
     Set-Variable -Name $name -Value $window.FindName($name)
 }
 function Brush([string]$color) { return [Windows.Media.BrushConverter]::new().ConvertFromString($color) }
@@ -152,18 +159,31 @@ function Start-ConnectionWatcher {
     $script:connectionProcess = [Diagnostics.Process]::Start($info)
 }
 function Update-Connection {
+    $phase = 'unavailable'
     try {
         if (-not $script:connectionProcess -or $script:connectionProcess.HasExited) { throw 'Watcher unavailable' }
         $connection = Get-Content -LiteralPath $helperConnectionPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($connection.updated)).TotalSeconds
         if ($connection.watcherPid -ne $script:connectionProcess.Id -or $age -gt 7 -or $age -lt -2) { throw 'Connection state expired' }
         Set-ConnectionDisplay $connection.phase $connection.phone $connection.method
+        $phase = $connection.phase
     } catch { Set-ConnectionDisplay 'unavailable' '' }
+    Update-AutoSharing $phase
 }
-function Save-Settings([string]$direction, [bool]$closeToTray) {
+function Update-AutoSharing([string]$phase) {
+    $script:connectionPhase = $phase
+    # 只有明确断开才开启下一次机会；查询暂时失败不算一次重新连接。
+    if ($phase -eq 'disconnected') { $script:autoShareAttempted = $false; return }
+    if ($phase -ne 'connected' -or -not $script:autoShareOnConnect -or $script:autoShareAttempted -or $script:helperClosing -or $ValidateOnly) { return }
+    if (-not $ShareButton.IsEnabled -or ($script:helperProcess -and -not $script:helperProcess.HasExited)) { return }
+    # 在启动前占用本次机会，避免失败或模态对话框重入时反复启动。
+    $script:autoShareAttempted = $true
+    Toggle-Sharing
+}
+function Save-Settings([string]$direction, [bool]$closeToTray, [bool]$autoShareOnConnect = $script:autoShareOnConnect) {
     $temporary = $helperSettingsPath + '.tmp'
     $backup = $helperSettingsPath + '.bak'
-    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; autoShareOnConnect = $autoShareOnConnect; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     if ([IO.File]::Exists($helperSettingsPath)) {
         [IO.File]::Replace($temporary, $helperSettingsPath, $backup)
         try { [IO.File]::Delete($backup) } catch {}
@@ -171,6 +191,81 @@ function Save-Settings([string]$direction, [bool]$closeToTray) {
     else { [IO.File]::Move($temporary, $helperSettingsPath) }
 }
 function Save-Direction([string]$direction) { Save-Settings $direction $script:closeToTray }
+function Set-AutoSharePreference([bool]$enabled) {
+    Save-Settings $script:selectedDirection $script:closeToTray $enabled
+    $script:autoShareOnConnect = $enabled
+    $AutoShareSwitch.IsChecked = $enabled
+    if ($enabled) {
+        $script:autoShareAttempted = $false
+        Update-AutoSharing $script:connectionPhase
+    }
+}
+function Get-StartupCommand {
+    if (-not (Test-Path -LiteralPath $helperExecutable -PathType Leaf) -or [IO.Path]::GetExtension($helperExecutable) -ne '.exe') { return $null }
+    return '"' + [IO.Path]::GetFullPath($helperExecutable) + '" --startup'
+}
+function Get-StartupEnabled {
+    $command = Get-StartupCommand
+    if (-not $command) { return $false }
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($script:startupRegistrySubKey)
+    try { return $key -and $key.GetValue($script:startupRegistryName) -eq $command }
+    finally { if ($key) { $key.Close() } }
+}
+function Set-StartupEnabled([bool]$enabled) {
+    $command = Get-StartupCommand
+    if ($enabled -and -not $command) { throw '请通过打包后的 EXE 使用开机自启动。' }
+    $key = if ($enabled) {
+        [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($script:startupRegistrySubKey)
+    } else {
+        [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($script:startupRegistrySubKey, $true)
+    }
+    try {
+        if ($enabled) { $key.SetValue($script:startupRegistryName, $command, [Microsoft.Win32.RegistryValueKind]::String) }
+        elseif ($key) { $key.DeleteValue($script:startupRegistryName, $false) }
+    } finally { if ($key) { $key.Close() } }
+}
+function New-StyledDialog([string]$file) {
+    [xml]$dialogXaml = [IO.File]::ReadAllText((Join-Path $helperRoot $file))
+    $resources = $dialogXaml.CreateElement('Window.Resources', 'http://schemas.microsoft.com/winfx/2006/xaml/presentation')
+    foreach ($style in $xaml.DocumentElement.SelectNodes('*[local-name()="Window.Resources"]/*')) {
+        $resources.AppendChild($dialogXaml.ImportNode($style, $true)) | Out-Null
+    }
+    $dialogXaml.DocumentElement.PrependChild($resources) | Out-Null
+    return [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($dialogXaml))
+}
+function New-SettingsDialog {
+    $dialog = New-StyledDialog 'settings.xaml'
+    $startup = $dialog.FindName('StartupSwitch')
+    $feedback = $dialog.FindName('SettingsFeedback')
+    $startup.IsEnabled = [bool](Get-StartupCommand)
+    if (-not $startup.IsEnabled) { $feedback.Text = '请通过打包后的 EXE 使用开机自启动。' }
+    try { $startup.IsChecked = [bool](Get-StartupEnabled) }
+    catch { $startup.IsEnabled = $false; $feedback.Text = '无法读取开机自启动设置：' + $_.Exception.Message }
+    $startup.Add_Click({
+        $enabled = $startup.IsChecked -eq $true
+        try {
+            Set-StartupEnabled $enabled
+            $feedback.Foreground = Brush '#85888D'
+            $feedback.Text = $(if ($enabled) { '已开启，登录 Windows 后将在托盘中运行。' } else { '已关闭开机自启动。' })
+        } catch {
+            $startup.IsChecked = -not $enabled
+            $feedback.Foreground = Brush '#BC3D3D'
+            $feedback.Text = '无法更新开机自启动：' + $_.Exception.Message
+        }
+    }.GetNewClosure())
+    $dialog.FindName('SettingsDone').Add_Click({ $dialog.Close() }.GetNewClosure())
+    return $dialog
+}
+function Show-SettingsDialog {
+    if ($script:settingsDialogVisible) { return }
+    try {
+        $script:settingsDialogVisible = $true
+        $dialog = New-SettingsDialog
+        $dialog.Owner = $window
+        $dialog.ShowDialog() | Out-Null
+    } catch { Show-HelperError '无法打开设置' $_ }
+    finally { $script:settingsDialogVisible = $false }
+}
 function Show-CompatibilityMessage([string]$message) {
     if (-not $ValidateOnly) {
         Show-MainWindow
@@ -235,12 +330,14 @@ $LeftButton.Add_Click({ Choose-Direction 'left' })
 $RightButton.Add_Click({ Choose-Direction 'right' })
 function Toggle-Sharing {
     try {
+    $script:autoShareAttempted = $true
     if ($script:helperProcess -and -not $script:helperProcess.HasExited) {
         [IO.File]::WriteAllText($helperStopPath, 'stop')
         $ShareButton.IsEnabled = $false
         $StatusTitle.Text = '正在停止共享…'
         return
     }
+    if ($script:helperProcess) { $script:helperProcess.Dispose(); $script:helperProcess = $null }
     if (-not (Test-Path -LiteralPath $helperExecutable)) {
         [Windows.MessageBox]::Show('没有找到 C# 后端程序：' + $helperExecutable, '无法启动') | Out-Null
         return
@@ -259,12 +356,23 @@ function Toggle-Sharing {
     } catch { Show-HelperError '共享操作失败' $_ }
 }
 $ShareButton.Add_Click({ Toggle-Sharing })
-$window.Add_ContentRendered({
+$AutoShareSwitch.IsChecked = $script:autoShareOnConnect
+$AutoShareSwitch.Add_Click({
+    try { Set-AutoSharePreference ($AutoShareSwitch.IsChecked -eq $true) }
+    catch { $AutoShareSwitch.IsChecked = $script:autoShareOnConnect; Show-HelperError '无法保存自动共享设置' $_ }
+})
+$SettingsButton.Add_Click({ Show-SettingsDialog })
+function Complete-WindowStartup {
+    if ($script:startupTrayRequested) {
+        $script:startupTrayRequested = $false
+        Minimize-ToTray
+    }
     if ($script:startupShareRequested) {
         $script:startupShareRequested = $false
         $ShareButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
     }
-})
+}
+$window.Add_ContentRendered({ Complete-WindowStartup })
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(350)
 $timer.Add_Tick({
@@ -305,14 +413,7 @@ $timer.Add_Tick({
     }
 })
 function New-CloseDialog {
-    [xml]$dialogXaml = [IO.File]::ReadAllText((Join-Path $helperRoot 'close.xaml'))
-    $resources = $dialogXaml.CreateElement('Window.Resources', 'http://schemas.microsoft.com/winfx/2006/xaml/presentation')
-    foreach ($style in $xaml.DocumentElement.SelectNodes('*[local-name()="Window.Resources"]/*')) {
-        $resources.AppendChild($dialogXaml.ImportNode($style, $true)) | Out-Null
-    }
-    $dialogXaml.DocumentElement.PrependChild($resources) | Out-Null
-    $dialogReader = New-Object System.Xml.XmlNodeReader($dialogXaml)
-    $dialog = [Windows.Markup.XamlReader]::Load($dialogReader)
+    $dialog = New-StyledDialog 'close.xaml'
     $dialog.FindName('DialogBrandMark').Source = $script:brandSource
     $dialog.Tag = [pscustomobject]@{ Choice = 'cancel'; Remember = $false }
     if (-not $script:helperProcess -or $script:helperProcess.HasExited) {
@@ -361,7 +462,14 @@ function Handle-WindowClosing($eventArgs) {
 $window.Add_Closing({ param($sender, $eventArgs) Handle-WindowClosing $eventArgs })
 try {
     if ($ValidateOnly) {
-        if (-not $LeftButton -or -not $RightButton -or -not $ShareButton) { throw 'Missing controls' }
+        if (-not $LeftButton -or -not $RightButton -or -not $ShareButton -or -not $SettingsButton -or -not $AutoShareSwitch) { throw 'Missing controls' }
+        $SettingsButton.Measure([Windows.Size]::new($SettingsButton.Width, $SettingsButton.Height))
+        $SettingsButton.Arrange([Windows.Rect]::new(0, 0, $SettingsButton.Width, $SettingsButton.Height))
+        $SettingsButton.UpdateLayout()
+        $iconSlot = $SettingsButton.Template.FindName('Surface', $SettingsButton).Child
+        if ($iconSlot.ActualWidth -lt $SettingsButton.Content.DesiredSize.Width -or $iconSlot.ActualHeight -lt $SettingsButton.Content.DesiredSize.Height) { throw 'Settings icon is clipped' }
+        $settingsDialog = New-SettingsDialog
+        if (-not $settingsDialog.FindName('StartupSwitch')) { throw 'Missing startup switch' }
         Update-Direction 'left'
         if ([Windows.Controls.Canvas]::GetLeft($PhoneFrame) -ne 53) { throw 'Left layout invalid' }
         Update-Direction 'right'

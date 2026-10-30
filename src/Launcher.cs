@@ -18,7 +18,7 @@ using System.Windows.Forms;
 internal static class Launcher
 {
     private static readonly string[] Files = {
-        "助手.ps1", "界面.ps1", "main.xaml", "close.xaml", "app.ico"
+        "助手.ps1", "界面.ps1", "main.xaml", "close.xaml", "settings.xaml", "app.ico"
     };
     private static readonly string AppRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OPPO-Mouse-sharing");
@@ -41,6 +41,7 @@ internal static class Launcher
             catch { return 1; }
         }
         bool selfTest = args.Contains("--self-test");
+        bool startInTray = args.Contains("--startup");
         Mutex instance = null;
         bool ownsInstance = false;
         try
@@ -53,7 +54,7 @@ internal static class Launcher
                 catch (AbandonedMutexException) { ownsInstance = true; }
                 if (!ownsInstance)
                 {
-                    MessageBox.Show("助手已经打开，请双击右下角托盘图标恢复窗口。", "键鼠共享助手");
+                    if (!startInTray) MessageBox.Show("助手已经打开，请双击右下角托盘图标恢复窗口。", "键鼠共享助手");
                     return 0;
                 }
             }
@@ -71,6 +72,7 @@ internal static class Launcher
             string arguments = "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "
                 + Quote(Path.Combine(runtime, "助手.ps1"));
             if (args.Contains("--start-sharing")) arguments += " -StartSharing";
+            if (startInTray) arguments += " -StartInTray";
             ProcessStartInfo info = StartInfo(PowerShell, arguments, runtime, data);
             using (Process process = Process.Start(info))
             {
