@@ -133,6 +133,12 @@ try {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testRegistry)
     try { Assert ($key.GetValue('KeepOtherValue') -eq 'untouched') 'Disabling startup changed another value.' }
     finally { $key.Close() }
+    $helperExecutable = Join-Path $testRoot 'missing.exe'
+    $failureView = New-SettingsDialog
+    $failureSwitch = $failureView.FindName('StartupSwitch')
+    $failureSwitch.IsChecked = $true
+    $failureSwitch.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+    Assert ($failureSwitch.IsChecked -eq $false -and $failureView.FindName('SettingsFeedback').Text -like '无法更新开机自启动*') 'Startup failure was not shown and rolled back.'
     Write-Output ("Preferences and automatic sharing passed: {0} checks." -f $checks)
 } finally {
     if ($script:helperProcess) {

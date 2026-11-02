@@ -241,15 +241,16 @@ function New-SettingsDialog {
     if (-not $startup.IsEnabled) { $feedback.Text = '请通过打包后的 EXE 使用开机自启动。' }
     try { $startup.IsChecked = [bool](Get-StartupEnabled) }
     catch { $startup.IsEnabled = $false; $feedback.Text = '无法读取开机自启动设置：' + $_.Exception.Message }
+    $setStartup = ${function:Set-StartupEnabled}
     $startup.Add_Click({
         $enabled = $startup.IsChecked -eq $true
         try {
-            Set-StartupEnabled $enabled
-            $feedback.Foreground = Brush '#85888D'
+            & $setStartup $enabled
+            $feedback.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#85888D')
             $feedback.Text = $(if ($enabled) { '已开启，登录 Windows 后将在托盘中运行。' } else { '已关闭开机自启动。' })
         } catch {
             $startup.IsChecked = -not $enabled
-            $feedback.Foreground = Brush '#BC3D3D'
+            $feedback.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#BC3D3D')
             $feedback.Text = '无法更新开机自启动：' + $_.Exception.Message
         }
     }.GetNewClosure())
