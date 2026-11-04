@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="键鼠共享助手" Width="680" Height="632" ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen" Background="#EFF0F1" FontFamily="Microsoft YaHei UI" Foreground="#14171B" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="键鼠共享助手" Width="680" Height="680" ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen" Background="#EFF0F1" FontFamily="Microsoft YaHei UI" Foreground="#14171B" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
  <Window.Resources>
   <Style x:Key="SoftButton" TargetType="Button">
    <Setter Property="Cursor" Value="Hand" /><Setter Property="FontSize" Value="13" />
@@ -60,7 +60,7 @@
   </Style>
  </Window.Resources>
  <Grid Margin="28,22,28,20">
-  <Grid.RowDefinitions><RowDefinition Height="142" /><RowDefinition Height="16" /><RowDefinition Height="244" /><RowDefinition Height="44" /><RowDefinition Height="64" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+  <Grid.RowDefinitions><RowDefinition Height="142" /><RowDefinition Height="16" /><RowDefinition Height="244" /><RowDefinition Height="44" /><RowDefinition Height="64" /><RowDefinition Height="48" /><RowDefinition Height="*" /></Grid.RowDefinitions>
   <Grid>
    <Grid.ColumnDefinitions><ColumnDefinition Width="244" /><ColumnDefinition Width="24" /><ColumnDefinition /></Grid.ColumnDefinitions>
    <StackPanel>
@@ -102,7 +102,7 @@
      </Grid>
      <TextBlock x:Name="ConnectionDetail" Text="正在查询手机连接状态。" FontSize="11" Foreground="#85888D" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" />
     </StackPanel>
-   <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="15" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="手机位置" FontSize="11" Foreground="#85888D" VerticalAlignment="Center" /><Border Grid.Column="2" Background="#E4E5E7" CornerRadius="9" Padding="3" Height="42" VerticalAlignment="Center" x:Name="DirectionSelector">
+   <Grid x:Name="DirectionControls" Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="15" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="手机位置" FontSize="11" Foreground="#85888D" VerticalAlignment="Center" /><Border Grid.Column="2" Background="#E4E5E7" CornerRadius="9" Padding="3" Height="42" VerticalAlignment="Center" x:Name="DirectionSelector">
     <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="3" /><ColumnDefinition /></Grid.ColumnDefinitions>
      <Button x:Name="LeftButton" Content="←  左侧" Style="{StaticResource SoftButton}" FontSize="12" Padding="8,7" AutomationProperties.Name="手机在左侧" />
      <Button x:Name="RightButton" Grid.Column="2" Content="右侧  →" Style="{StaticResource SoftButton}" FontSize="12" Padding="8,7" AutomationProperties.Name="手机在右侧" />
@@ -110,7 +110,7 @@
    </Border>
   </Grid></Grid>
   </Grid>
-  <Border Grid.Row="2" Background="White" BorderBrush="#E5E6E8" BorderThickness="1" CornerRadius="14">
+  <Border x:Name="LegacyDiagram" Grid.Row="2" Background="White" BorderBrush="#E5E6E8" BorderThickness="1" CornerRadius="14">
    <Viewbox Stretch="Uniform" Margin="10,20,10,18"><Canvas x:Name="DeviceLayout" Width="516" Height="170">
     <Ellipse Canvas.Left="167" Canvas.Top="144" Width="183" Height="9" Fill="#F1F2F3" />
     <Border Canvas.Left="174" Canvas.Top="29" Width="168" Height="104" Background="#30343B" BorderBrush="#24282E" BorderThickness="1" CornerRadius="8" Padding="5">
@@ -133,6 +133,13 @@
     <TextBlock x:Name="PhoneCaption" Canvas.Top="155" Width="70" Text="手机" TextAlignment="Center" FontSize="10" Foreground="#85888D" />
    </Canvas></Viewbox>
   </Border>
+  <Border x:Name="SdkOverview" Grid.Row="2" Background="White" BorderBrush="#E5E6E8" BorderThickness="1" CornerRadius="14" Visibility="Collapsed" Padding="26">
+   <StackPanel VerticalAlignment="Center">
+    <TextBlock Text="OPPO 互联屏幕协同" FontSize="19" FontWeight="SemiBold" Foreground="#14171B"/>
+    <TextBlock Text="连接手机后，可在此启用键鼠共享。" FontSize="13" Foreground="#65696F" Margin="0,12,0,0" TextWrapping="Wrap"/>
+    <TextBlock Text="需要其他协同选项时，打开 OPPO 互联屏幕协同设置。" FontSize="12" Foreground="#85888D" Margin="0,9,0,0" TextWrapping="Wrap"/>
+   </StackPanel>
+  </Border>
   <Button x:Name="SettingsButton" Grid.Row="0" Width="30" Height="30" HorizontalAlignment="Right" VerticalAlignment="Top" Style="{StaticResource SoftButton}" Padding="4" Background="Transparent" BorderBrush="Transparent" ToolTip="设置" AutomationProperties.Name="设置">
    <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
     <Path Data="M 9,2 L 15,2 L 15.7,5 L 18,6.3 L 21,5.5 L 24,10.5 L 21.7,12.7 L 21.7,15.3 L 24,17.5 L 21,22.5 L 18,21.7 L 15.7,23 L 15,26 L 9,26 L 8.3,23 L 6,21.7 L 3,22.5 L 0,17.5 L 2.3,15.3 L 2.3,12.7 L 0,10.5 L 3,5.5 L 6,6.3 L 8.3,5 Z" Stroke="#65696F" StrokeThickness="1.6" StrokeLineJoin="Round" Fill="Transparent"><Path.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.8" ScaleY="0.8" /><TranslateTransform X="2.4" Y="0.8" /></TransformGroup></Path.RenderTransform></Path>
@@ -145,6 +152,7 @@
    <CheckBox x:Name="AutoShareSwitch" Grid.Column="1" Style="{StaticResource Switch}" AutomationProperties.Name="连接设备后自动共享" ToolTip="检测到设备连接时自动启用共享；手动停止后，等待下次连接再启用。" />
   </Grid>
   <Button x:Name="ShareButton" Grid.Row="4" Style="{StaticResource PrimaryButton}" Background="#0066FF" BorderBrush="#0066FF" Foreground="White" FontSize="15" FontWeight="SemiBold" Content="启用共享" Margin="0,15,0,0" />
-  <TextBlock x:Name="DirectionHint" Grid.Row="5" FontSize="11" Foreground="#85888D" TextAlignment="Center" VerticalAlignment="Center" Margin="0,7,0,0" />
+  <Button x:Name="OpenClientSharingButton" Grid.Row="5" Style="{StaticResource SoftButton}" Content="打开 OPPO 互联屏幕协同设置" FontSize="13" Padding="14,4" Margin="0,6,0,0" ToolTip="在新版 OPPO 互联中打开屏幕协同页面和设置" />
+  <TextBlock x:Name="DirectionHint" Grid.Row="6" FontSize="11" Foreground="#85888D" TextAlignment="Center" VerticalAlignment="Center" Margin="0,7,0,0" />
  </Grid>
 </Window>

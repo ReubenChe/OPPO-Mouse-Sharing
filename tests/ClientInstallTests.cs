@@ -1,5 +1,19 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+internal sealed class FakeSdk : IIpc
+{
+    internal object[] Devices;
+    internal bool Fail;
+    public Task<Dictionary<string, object>> Request(string pipe, string method, object parameters, int timeout = 3500)
+    {
+        if (Fail) throw new IOException("fixture error");
+        if (pipe != "devicespace_sdk_ipc" || method != "get_device_list") throw new Exception("Unexpected SDK request");
+        return Task.FromResult(Json.Fields("data", Devices));
+    }
+}
 
 internal static class ClientInstallTests
 {
@@ -39,6 +53,15 @@ internal static class ClientInstallTests
             Directory.CreateDirectory(root);
             try
             {
+                if (!Backend.UseClientSdk("17.100.10") || !Backend.UseClientSdk("17.100.10.0") || !Backend.UseClientSdk("17.100.11") || !Backend.UseClientSdk("17.101.0") || !Backend.UseClientSdk("18.0.0") || Backend.UseClientSdk("17.100.9") || Backend.UseClientSdk("16.2.20") || Backend.UseClientSdk("unknown") || Backend.UseClientSdk("17.100.10-beta")) throw new Exception("Client version routing changed unexpectedly.");
+                var edge = new EdgeTransition();
+                if (edge.Observe(true) || edge.Observe(true) || edge.Observe(false) || !edge.Observe(true) || edge.Observe(true)) throw new Exception("Edge trigger must require a fresh entry after arming and fire only once per entry.");
+                var sdk = new FakeSdk { Devices = new object[] { Json.Fields("device_type", 8, "is_connected", true, "device_id", "test", "device_name", "Test phone") } };
+                if (Json.Text(Backend.QuerySdkConnection(sdk).GetAwaiter().GetResult()["phase"]) != "connected") throw new Exception("Connected SDK phone not detected.");
+                sdk.Devices = new object[0];
+                if (Json.Text(Backend.QuerySdkConnection(sdk).GetAwaiter().GetResult()["phase"]) != "disconnected") throw new Exception("Empty SDK phone list was not disconnected.");
+                sdk.Fail = true;
+                if (Json.Text(Backend.QuerySdkConnection(sdk).GetAwaiter().GetResult()["phase"]) != "unavailable") throw new Exception("SDK failure must not look like a disconnection.");
                 string executable = CreateInstall(Path.Combine(root, "non-default drive", "互联客户端"));
                 if (!String.Equals(Resolve(executable), Path.GetDirectoryName(executable), StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Non-default client installation was ignored.");

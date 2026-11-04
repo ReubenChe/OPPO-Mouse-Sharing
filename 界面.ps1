@@ -1,4 +1,4 @@
-﻿param([switch]$ValidateOnly, [switch]$StartSharing, [switch]$StartInTray)
+﻿param([switch]$ValidateOnly, [switch]$StartSharing, [switch]$StartInTray, [switch]$Preview)
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $helperRoot = $PSScriptRoot
@@ -21,6 +21,11 @@ $script:closeToTray = $false
 $script:autoShareOnConnect = $false
 $script:autoShareAttempted = $false
 $script:connectionPhase = 'unavailable'
+$script:clientMode = 'legacy'
+$script:clientSharingActive = $false
+$script:guideShown = $false
+$script:guideAttempted = $false
+$script:clientSdkPipeName = 'devicespace_sdk_ipc'
 $script:startupRegistrySubKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
 $script:startupRegistryName = 'OppoMouseSharing'
 $script:warnedClientVersions = @()
@@ -29,7 +34,8 @@ $script:trayMenu = $null
 $script:trayDrawingIcon = $null
 $helperMutex = $null
 if (-not $ValidateOnly) {
-    $helperMutex = New-Object System.Threading.Mutex($false, 'Local\OppoConnectKmsHelper16220')
+    $mutexName = if ($Preview) { 'Local\OppoConnectKmsHelperPreview' } else { 'Local\OppoConnectKmsHelper16220' }
+    $helperMutex = New-Object System.Threading.Mutex($false, $mutexName)
     if (-not $helperMutex.WaitOne(0, $false)) {
         [Windows.MessageBox]::Show('助手已经打开，请使用现有窗口。', '键鼠共享助手') | Out-Null
         exit
@@ -40,6 +46,7 @@ try {
     if ($saved.direction -in @('left','right')) { $script:selectedDirection = $saved.direction }
     if ($saved.closeToTray -is [bool]) { $script:closeToTray = $saved.closeToTray }
     if ($saved.autoShareOnConnect -is [bool]) { $script:autoShareOnConnect = $saved.autoShareOnConnect }
+    if ($saved.guideShown -is [bool]) { $script:guideShown = $saved.guideShown }
     $script:warnedClientVersions = @($saved.warnedClientVersions | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
 } catch {}
 [xml]$xaml = [IO.File]::ReadAllText((Join-Path $helperRoot 'main.xaml'))
@@ -51,7 +58,7 @@ if (Test-Path -LiteralPath (Join-Path $helperRoot 'app.ico')) {
     $window.Icon = $script:brandSource
     $window.FindName('BrandMark').Source = $script:brandSource
 }
-foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','DirectionHint','SettingsButton','AutoShareSwitch')) {
+foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','DirectionControls','LegacyDiagram','SdkOverview','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','OpenClientSharingButton','DirectionHint','SettingsButton','AutoShareSwitch')) {
     Set-Variable -Name $name -Value $window.FindName($name)
 }
 function Brush([string]$color) { return [Windows.Media.BrushConverter]::new().ConvertFromString($color) }
@@ -66,13 +73,10 @@ function Minimize-ToTray {
 }
 function Update-TrayMenu {
     if (-not $script:trayIcon) { return }
-    $running = $script:helperProcess -and -not $script:helperProcess.HasExited
-    $script:trayToggleItem.Text = $(if ($running) { '停止共享' } else { '启用共享' })
+    $script:trayToggleItem.Text = [string]$ShareButton.Content
     $script:trayToggleItem.Enabled = $ShareButton.IsEnabled -and -not $script:helperClosing
-    $script:trayLeftItem.Checked = $script:selectedDirection -eq 'left'
-    $script:trayRightItem.Checked = $script:selectedDirection -eq 'right'
-    $script:trayLeftItem.Enabled = -not $script:helperClosing
-    $script:trayRightItem.Enabled = -not $script:helperClosing
+    $script:trayClientSharingItem.Enabled = $script:clientMode -eq 'sdk' -and -not $script:helperClosing
+    $script:trayExitItem.Text = if ($script:clientMode -eq 'sdk') { '结束协同并退出' } else { '停止共享并退出' }
     $script:trayRememberItem.Checked = $script:closeToTray
     $script:trayStatusItem.Text = '共享状态：' + $StatusTitle.Text
     $script:trayIcon.Text = '键鼠共享助手 - ' + $StatusTitle.Text
@@ -93,13 +97,13 @@ function Initialize-Tray {
     $script:trayStatusItem = [Windows.Forms.ToolStripMenuItem]::new('共享状态：尚未启用')
     $script:trayStatusItem.Enabled = $false
     $script:trayToggleItem = [Windows.Forms.ToolStripMenuItem]::new('启用共享')
-    $script:trayLeftItem = [Windows.Forms.ToolStripMenuItem]::new('手机在左侧')
-    $script:trayRightItem = [Windows.Forms.ToolStripMenuItem]::new('手机在右侧')
+    $script:trayClientSharingItem = [Windows.Forms.ToolStripMenuItem]::new('打开 OPPO 互联屏幕协同设置')
+    $script:trayClientSharingItem.ToolTipText = '适用于已启用 SDK 的新版 OPPO 互联'
     $script:trayRememberItem = [Windows.Forms.ToolStripMenuItem]::new('关闭时直接最小化到托盘')
     $script:trayExitItem = [Windows.Forms.ToolStripMenuItem]::new('停止共享并退出')
     $script:trayMenu.Items.AddRange([Windows.Forms.ToolStripItem[]]@(
         $open, $script:trayStatusItem, [Windows.Forms.ToolStripSeparator]::new(),
-        $script:trayToggleItem, $script:trayLeftItem, $script:trayRightItem,
+        $script:trayToggleItem, $script:trayClientSharingItem,
         [Windows.Forms.ToolStripSeparator]::new(), $script:trayRememberItem,
         [Windows.Forms.ToolStripSeparator]::new(), $script:trayExitItem
     ))
@@ -111,8 +115,7 @@ function Initialize-Tray {
     $script:trayIcon.Add_DoubleClick({ Show-MainWindow })
     $script:trayMenu.Add_Opening({ Update-TrayMenu })
     $script:trayToggleItem.Add_Click({ if ($ShareButton.IsEnabled -and -not $script:helperClosing) { Toggle-Sharing; Update-TrayMenu } })
-    $script:trayLeftItem.Add_Click({ Choose-Direction 'left' })
-    $script:trayRightItem.Add_Click({ Choose-Direction 'right' })
+    $script:trayClientSharingItem.Add_Click({ if ($script:clientMode -eq 'sdk' -and -not $script:helperClosing) { Show-ClientSharingPage } })
     $script:trayRememberItem.Add_Click({
         try { Set-ClosePreference (-not $script:closeToTray) }
         catch { Show-HelperError '无法保存关闭选项' $_ }
@@ -158,6 +161,29 @@ function Start-ConnectionWatcher {
     $info.CreateNoWindow = $true
     $script:connectionProcess = [Diagnostics.Process]::Start($info)
 }
+function Get-StartSharingLabel {
+    if ($script:clientMode -eq 'sdk') { return '开始协同' }
+    return '启用共享'
+}
+function Get-StopSharingLabel {
+    if ($script:clientMode -eq 'sdk') { return '结束协同' }
+    return '停止共享'
+}
+function Set-ClientMode([string]$mode, [string]$version) {
+    $previousMode = $script:clientMode
+    $script:clientMode = if ($mode -eq 'sdk') { 'sdk' } else { 'legacy' }
+    $isSdk = $script:clientMode -eq 'sdk'
+    $DirectionControls.Visibility = if ($isSdk) { 'Collapsed' } else { 'Visible' }
+    $LegacyDiagram.Visibility = if ($isSdk) { 'Collapsed' } else { 'Visible' }
+    $SdkOverview.Visibility = if ($isSdk) { 'Visible' } else { 'Collapsed' }
+    $DirectionHint.Visibility = if ($isSdk) { 'Collapsed' } else { 'Visible' }
+    $OpenClientSharingButton.Visibility = if ($isSdk) { 'Visible' } else { 'Collapsed' }
+    $ConnectionTitle.ToolTip = if ($version) { 'OPPO 互联版本：' + $version } else { $null }
+    if ($previousMode -ne $script:clientMode -and -not $script:helperProcess) {
+        $StatusDetail.Text = if ($isSdk) { '连接手机后启用键鼠共享。' } else { '选择方向后启用共享。' }
+        if (-not $script:clientSharingActive) { $ShareButton.Content = Get-StartSharingLabel }
+    }
+}
 function Update-Connection {
     $phase = 'unavailable'
     try {
@@ -165,8 +191,28 @@ function Update-Connection {
         $connection = Get-Content -LiteralPath $helperConnectionPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($connection.updated)).TotalSeconds
         if ($connection.watcherPid -ne $script:connectionProcess.Id -or $age -gt 7 -or $age -lt -2) { throw 'Connection state expired' }
+        Set-ClientMode $connection.clientMode $connection.clientVersion
         Set-ConnectionDisplay $connection.phase $connection.phone $connection.method
         $phase = $connection.phase
+        if ($script:clientMode -eq 'sdk') {
+            $script:clientSharingActive = $connection.phase -eq 'connected' -and $connection.shareStatus -eq 2 -and $connection.shareMode -eq 0
+            if (-not $script:helperProcess -and $connection.phase -ne 'connected') {
+                $StatusDot.Fill = Brush '#93979D'; $StatusTitle.Text = '共享状态未确认'; $StatusDetail.Text = '请先确认手机和客户端连接。'; $ShareButton.Content = Get-StartSharingLabel
+            }
+            if (-not $script:helperProcess -and $connection.phase -eq 'connected') {
+                if ($script:clientSharingActive) {
+                    $StatusDot.Fill = Brush '#27A948'; $StatusTitle.Text = '正在共享'; $StatusDetail.Text = 'OPPO 互联键鼠共享已开启。'; $ShareButton.Content = Get-StopSharingLabel
+                } elseif ($connection.shareStatus -eq 0) {
+                    $StatusDot.Fill = Brush '#93979D'; $StatusTitle.Text = '尚未启用'; $StatusDetail.Text = '连接手机后启用键鼠共享。'; $ShareButton.Content = Get-StartSharingLabel
+                } elseif ($connection.shareStatus -eq 2 -and $connection.shareMode -ne 0) {
+                    $StatusDot.Fill = Brush '#B87918'; $StatusTitle.Text = '其他协同运行中'; $StatusDetail.Text = '请先在 OPPO 互联中结束当前协同。'; $ShareButton.Content = Get-StartSharingLabel
+                } elseif ($connection.shareStatus -eq 1) {
+                    $StatusDot.Fill = Brush '#0066FF'; $StatusTitle.Text = '正在开启协同'; $StatusDetail.Text = '请稍候。'; $ShareButton.Content = Get-StartSharingLabel
+                } elseif ($null -eq $connection.shareStatus) {
+                    $StatusDot.Fill = Brush '#B87918'; $StatusTitle.Text = '共享状态未确认'; $StatusDetail.Text = '请检查 OPPO 互联。'; $ShareButton.Content = Get-StartSharingLabel
+                }
+            }
+        } else { $script:clientSharingActive = $false }
     } catch { Set-ConnectionDisplay 'unavailable' '' }
     Update-AutoSharing $phase
 }
@@ -174,6 +220,7 @@ function Update-AutoSharing([string]$phase) {
     $script:connectionPhase = $phase
     # 只有明确断开才开启下一次机会；查询暂时失败不算一次重新连接。
     if ($phase -eq 'disconnected') { $script:autoShareAttempted = $false; return }
+    if ($phase -eq 'connected' -and $script:clientMode -eq 'sdk' -and $script:clientSharingActive) { $script:autoShareAttempted = $true; return }
     if ($phase -ne 'connected' -or -not $script:autoShareOnConnect -or $script:autoShareAttempted -or $script:helperClosing -or $ValidateOnly) { return }
     if (-not $ShareButton.IsEnabled -or ($script:helperProcess -and -not $script:helperProcess.HasExited)) { return }
     # 在启动前占用本次机会，避免失败或模态对话框重入时反复启动。
@@ -183,7 +230,7 @@ function Update-AutoSharing([string]$phase) {
 function Save-Settings([string]$direction, [bool]$closeToTray, [bool]$autoShareOnConnect = $script:autoShareOnConnect) {
     $temporary = $helperSettingsPath + '.tmp'
     $backup = $helperSettingsPath + '.bak'
-    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; autoShareOnConnect = $autoShareOnConnect; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; autoShareOnConnect = $autoShareOnConnect; guideShown = $script:guideShown; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     if ([IO.File]::Exists($helperSettingsPath)) {
         [IO.File]::Replace($temporary, $helperSettingsPath, $backup)
         try { [IO.File]::Delete($backup) } catch {}
@@ -201,6 +248,7 @@ function Set-AutoSharePreference([bool]$enabled) {
     }
 }
 function Get-StartupCommand {
+    if ($Preview) { return $null }
     if (-not (Test-Path -LiteralPath $helperExecutable -PathType Leaf) -or [IO.Path]::GetExtension($helperExecutable) -ne '.exe') { return $null }
     return '"' + [IO.Path]::GetFullPath($helperExecutable) + '" --startup'
 }
@@ -233,8 +281,32 @@ function New-StyledDialog([string]$file) {
     $dialogXaml.DocumentElement.PrependChild($resources) | Out-Null
     return [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($dialogXaml))
 }
+function Resolve-ProcessorVendor([string[]]$identifiers) {
+    foreach ($identifier in $identifiers) {
+        if ($identifier -match 'AuthenticAMD|AMD') { return 'AMD' }
+        if ($identifier -match 'GenuineIntel|Intel') { return 'Intel' }
+    }
+    return '未能自动识别'
+}
+function Get-ProcessorVendor {
+    $vendor = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('HARDWARE\DESCRIPTION\System\CentralProcessor\0')
+        if ($key) { try { $vendor = [string]$key.GetValue('VendorIdentifier') } finally { $key.Close() } }
+    } catch { }
+    return Resolve-ProcessorVendor @($vendor, $env:PROCESSOR_IDENTIFIER)
+}
+function Open-ProjectHome {
+    Start-Process -FilePath 'https://github.com/ReubenChe/OPPO-Mouse-Sharing' -ErrorAction Stop | Out-Null
+}
 function New-SettingsDialog {
     $dialog = New-StyledDialog 'settings.xaml'
+    $dialog.FindName('CpuHint').Text = '当前本机处理器类型：[ ' + (Get-ProcessorVendor) + ' ]。也可在 Windows“设置 → 系统 → 关于”中查看。'
+    $openProjectHome = ${function:Open-ProjectHome}
+    $dialog.FindName('GithubButton').Add_Click({
+        try { & $openProjectHome }
+        catch { [Windows.MessageBox]::Show('无法打开项目主页，请检查默认浏览器设置。', '键鼠共享助手') | Out-Null }
+    }.GetNewClosure())
     $startup = $dialog.FindName('StartupSwitch')
     $feedback = $dialog.FindName('SettingsFeedback')
     $startup.IsEnabled = [bool](Get-StartupCommand)
@@ -257,15 +329,28 @@ function New-SettingsDialog {
     $dialog.FindName('SettingsDone').Add_Click({ $dialog.Close() }.GetNewClosure())
     return $dialog
 }
-function Show-SettingsDialog {
+function Show-SettingsDialog([bool]$showHelp = $false) {
     if ($script:settingsDialogVisible) { return }
     try {
         $script:settingsDialogVisible = $true
         $dialog = New-SettingsDialog
+        if ($showHelp) { $dialog.FindName('SettingsTabs').SelectedItem = $dialog.FindName('HelpTab') }
         $dialog.Owner = $window
         $dialog.ShowDialog() | Out-Null
     } catch { Show-HelperError '无法打开设置' $_ }
     finally { $script:settingsDialogVisible = $false }
+}
+function Show-FirstRunGuide {
+    if ($script:guideShown -or $script:guideAttempted -or $ValidateOnly -or $script:helperClosing -or $script:settingsDialogVisible) { return }
+    if (-not $window.IsVisible -or $window.WindowState -ne [Windows.WindowState]::Normal) { return }
+    $script:guideAttempted = $true
+    $script:guideShown = $true
+    try { Save-Settings $script:selectedDirection $script:closeToTray }
+    catch {
+        $script:guideShown = $false
+        try { [IO.File]::AppendAllText((Join-Path $helperDataRoot 'ui-error.log'), ([DateTime]::Now.ToString('s') + ' 无法保存帮助提示记录：' + $_.Exception.Message + [Environment]::NewLine)) } catch {}
+    }
+    Show-SettingsDialog $true
 }
 function Show-CompatibilityMessage([string]$message) {
     if (-not $ValidateOnly) {
@@ -300,6 +385,33 @@ function Show-HelperError([string]$message, $errorRecord) {
         [Windows.MessageBox]::Show($window, $message + [Environment]::NewLine + $errorRecord.Exception.Message, '键鼠共享助手') | Out-Null
     }
 }
+function Invoke-ClientSdkRequest([string]$method, [hashtable]$parameters) {
+    $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $script:clientSdkPipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
+    try {
+        try { $pipe.Connect(1000) } catch { throw '无法连接 OPPO 互联的 SDK，请确认客户端正在运行且已启用 SDK。' }
+        $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false), 1024, $true)
+        $writer.AutoFlush = $true
+        $reader = [IO.StreamReader]::new($pipe, [Text.UTF8Encoding]::new($false), $false, 1024, $true)
+        $requestId = [Guid]::NewGuid().ToString('N')
+        $writer.WriteLine((@{ method = $method; params = $parameters; request_id = $requestId } | ConvertTo-Json -Compress -Depth 8))
+        $pending = $reader.ReadLineAsync()
+        if (-not $pending.Wait(2000)) { throw 'OPPO 互联 SDK 响应超时。' }
+        if (-not $pending.Result) { throw 'OPPO 互联 SDK 未返回响应。' }
+        $response = $pending.Result | ConvertFrom-Json -ErrorAction Stop
+        if ($response.request_id -ne $requestId -or $response.success -ne $true) { throw 'OPPO 互联未能完成请求，请确认手机已连接。' }
+        return $response.data
+    } finally { $pipe.Dispose() }
+}
+function Open-ClientSharingPage {
+    $devices = @(Invoke-ClientSdkRequest 'get_device_list' @{} | Where-Object { $_.is_connected -eq $true -and $_.device_type -eq 8 -and -not [string]::IsNullOrWhiteSpace($_.device_id) })
+    if ($devices.Count -eq 0) { throw '请先在 OPPO 互联中连接手机。' }
+    if ($devices.Count -ne 1) { throw '检测到多台已连接手机，请仅连接一台后重试。' }
+    $null = Invoke-ClientSdkRequest 'open_page' @{ page_type = 'screen_share_settings'; device_id = $devices[0].device_id }
+}
+function Show-ClientSharingPage {
+    try { Open-ClientSharingPage }
+    catch { Show-HelperError '无法打开 OPPO 互联屏幕协同设置' $_ }
+}
 function Update-Direction([string]$direction) {
     $script:selectedDirection = $direction
     $left = $direction -eq 'left'
@@ -332,6 +444,14 @@ $RightButton.Add_Click({ Choose-Direction 'right' })
 function Toggle-Sharing {
     try {
     $script:autoShareAttempted = $true
+    if ($script:clientMode -eq 'sdk' -and $script:clientSharingActive -and (-not $script:helperProcess -or $script:helperProcess.HasExited)) {
+        $phones = @(Invoke-ClientSdkRequest 'get_device_list' @{} | Where-Object { $_.is_connected -eq $true -and $_.device_type -eq 8 -and -not [string]::IsNullOrWhiteSpace($_.device_id) })
+        if ($phones.Count -ne 1) { throw '请确认仅有一台手机连接 OPPO 互联。' }
+        $null = Invoke-ClientSdkRequest 'stop_screen_share' @{ device_id = $phones[0].device_id }
+        $script:clientSharingActive = $false
+        $StatusTitle.Text = '正在停止共享…'; $ShareButton.Content = Get-StartSharingLabel
+        return
+    }
     if ($script:helperProcess -and -not $script:helperProcess.HasExited) {
         [IO.File]::WriteAllText($helperStopPath, 'stop')
         $ShareButton.IsEnabled = $false
@@ -353,7 +473,7 @@ function Toggle-Sharing {
     $startInfo.CreateNoWindow = $true
     $script:helperProcess = [Diagnostics.Process]::Start($startInfo)
     $StatusTitle.Text = '正在连接…'; $StatusDetail.Text = '请保持手机解锁。'
-    $ShareButton.Content = '停止共享'; $script:lastStateUpdate = ''
+    $ShareButton.Content = Get-StopSharingLabel; $script:lastStateUpdate = ''
     } catch { Show-HelperError '共享操作失败' $_ }
 }
 $ShareButton.Add_Click({ Toggle-Sharing })
@@ -363,6 +483,7 @@ $AutoShareSwitch.Add_Click({
     catch { $AutoShareSwitch.IsChecked = $script:autoShareOnConnect; Show-HelperError '无法保存自动共享设置' $_ }
 })
 $SettingsButton.Add_Click({ Show-SettingsDialog })
+$OpenClientSharingButton.Add_Click({ Show-ClientSharingPage })
 function Complete-WindowStartup {
     if ($script:startupTrayRequested) {
         $script:startupTrayRequested = $false
@@ -377,6 +498,7 @@ $window.Add_ContentRendered({ Complete-WindowStartup })
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(350)
 $timer.Add_Tick({
+    Show-FirstRunGuide
     Update-Connection
     Update-TrayMenu
     if (-not $script:helperProcess) { return }
@@ -393,21 +515,21 @@ $timer.Add_Tick({
                     }
                     'ready' {
                         $StatusDot.Fill = Brush '#27A948'; $StatusTitle.Text = '正在共享'
-                        $StatusDetail.Text = '从所选电脑边缘进入手机。'
+                        $StatusDetail.Text = if ($script:clientMode -eq 'sdk') { '键鼠共享已开启。' } else { '从所选电脑边缘进入手机。' }
                         $ShareButton.Background = Brush '#30343B'; $ShareButton.BorderBrush = Brush '#30343B'
                     }
                     'changing' { $StatusDot.Fill = Brush '#B87918'; $StatusTitle.Text = '正在切换方向…'; $StatusDetail.Text = '请先将指针移回电脑。' }
                     'starting' { $StatusDot.Fill = Brush '#0066FF'; $StatusTitle.Text = '正在连接…'; $StatusDetail.Text = '请保持手机解锁。' }
                     'stopping' { $StatusDot.Fill = Brush '#93979D'; $StatusTitle.Text = '正在停止共享…' }
                     'error' { $StatusDot.Fill = Brush '#BC3D3D'; $StatusTitle.Text = '共享已停止'; $StatusDetail.Text = $current.message }
-                    'stopped' { $StatusDot.Fill = Brush '#93979D'; $StatusTitle.Text = '共享已停止'; $StatusDetail.Text = '选择手机所在方向，即可再次启用。' }
+                    'stopped' { $StatusDot.Fill = Brush '#93979D'; $StatusTitle.Text = '共享已停止'; $StatusDetail.Text = if ($script:clientMode -eq 'sdk') { '可再次启用键鼠共享。' } else { '选择手机所在方向，即可再次启用。' } }
                 }
                 Show-ClientVersionNotice $current.clientVersion ($current.clientVersionVerified -eq $true)
             }
         } catch {}
     }
     if ($script:helperProcess.HasExited) {
-        $ShareButton.Content = '启用共享'; $ShareButton.IsEnabled = $true
+        $ShareButton.Content = Get-StartSharingLabel; $ShareButton.IsEnabled = $true
         $ShareButton.Background = Brush '#0066FF'; $ShareButton.BorderBrush = Brush '#0066FF'
         $script:helperProcess.Dispose(); $script:helperProcess = $null
         if ($script:helperClosing) { $window.Close() }
@@ -463,7 +585,7 @@ function Handle-WindowClosing($eventArgs) {
 $window.Add_Closing({ param($sender, $eventArgs) Handle-WindowClosing $eventArgs })
 try {
     if ($ValidateOnly) {
-        if (-not $LeftButton -or -not $RightButton -or -not $ShareButton -or -not $SettingsButton -or -not $AutoShareSwitch) { throw 'Missing controls' }
+        if (-not $LeftButton -or -not $RightButton -or -not $ShareButton -or -not $SettingsButton -or -not $AutoShareSwitch -or -not $OpenClientSharingButton) { throw 'Missing controls' }
         $SettingsButton.Measure([Windows.Size]::new($SettingsButton.Width, $SettingsButton.Height))
         $SettingsButton.Arrange([Windows.Rect]::new(0, 0, $SettingsButton.Width, $SettingsButton.Height))
         $SettingsButton.UpdateLayout()

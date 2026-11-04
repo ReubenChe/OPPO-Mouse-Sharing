@@ -8,6 +8,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -183,6 +184,81 @@ internal sealed class PipeHttp : IIpc
     }
 }
 
+// 新版合作接口使用逐行 JSON；与旧版 HTTP 管道分开，避免改变旧协议。
+internal sealed class ClientSdk : IIpc
+{
+    public async Task<Dictionary<string, object>> Request(string pipe, string method, object parameters, int timeout = 3500)
+    {
+        using (var client = new NamedPipeClientStream(".", pipe, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            var operation = Task.Run(() => {
+                client.Connect(timeout);
+                string id = Guid.NewGuid().ToString("N");
+                using (var writer = new StreamWriter(client, new UTF8Encoding(false), 1024, true))
+                using (var reader = new StreamReader(client, new UTF8Encoding(false), false, 1024, true))
+                {
+                    writer.AutoFlush = true;
+                    writer.WriteLine(Json.Encode(Json.Fields("method", method, "params", parameters ?? Json.Fields(), "request_id", id)));
+                    string line = reader.ReadLine();
+                    if (line == null || line.Length > 1024 * 1024) throw new IOException("OPPO 互联 SDK 响应异常。");
+                    var result = Json.Map(Json.Decode(line));
+                    if (Json.Text(Json.Get(result, "request_id")) != id || !(Json.Get(result, "success") is bool) || !(bool)Json.Get(result, "success"))
+                        throw new IOException("OPPO 互联未能完成请求，请检查手机连接及协同状态。");
+                    return result;
+                }
+            });
+            if (await Task.WhenAny(operation, Task.Delay(timeout)).ConfigureAwait(false) != operation)
+            {
+                client.Dispose();
+                ObserveFault(operation);
+                throw new TimeoutException("OPPO 互联 SDK 无响应，请检查客户端和 SDK 设置。");
+            }
+            return await operation.ConfigureAwait(false);
+        }
+    }
+    private static void ObserveFault(Task operation)
+    {
+        operation.ContinueWith(t => { var ignored = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+    }
+}
+
+// 只观察光标位置，不安装钩子、不拦截或修改用户输入。
+internal sealed class EdgeTransition
+{
+    private bool initialized, wasAtEdge;
+    internal bool Observe(bool atEdge)
+    {
+        if (!initialized) { initialized = true; wasAtEdge = atEdge; return false; }
+        bool entered = atEdge && !wasAtEdge; wasAtEdge = atEdge; return entered;
+    }
+}
+internal static class ScreenEdge
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo { public int Size; public Rect Monitor, Work; public int Flags; }
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(Point point, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    internal static bool TryAtOuterEdge(out bool atEdge)
+    {
+        atEdge = false;
+        Point point;
+        if (!GetCursorPos(out point)) return false;
+        IntPtr monitor = MonitorFromPoint(point, 2);
+        var info = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
+        if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return false;
+        if (point.X <= info.Monitor.Left + 1)
+            atEdge = MonitorFromPoint(new Point { X = info.Monitor.Left - 1, Y = point.Y }, 0) == IntPtr.Zero;
+        else if (point.X >= info.Monitor.Right - 2)
+            atEdge = MonitorFromPoint(new Point { X = info.Monitor.Right, Y = point.Y }, 0) == IntPtr.Zero;
+        return true;
+    }
+}
+
 // 所有共享状态转换都在后端事件循环中串行执行。
 // 仅传输层可替换，便于测试复用同一套状态机。
 internal sealed class SharingSession
@@ -259,6 +335,115 @@ internal sealed class SharingSession
 
 internal static class Backend
 {
+    internal static bool UseClientSdk(string version)
+    {
+        Version parsed;
+        if (!Version.TryParse(version, out parsed)) return false;
+        var normalized = new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0), Math.Max(parsed.Revision, 0));
+        return normalized.CompareTo(new Version(17, 100, 10, 0)) >= 0;
+    }
+    internal static async Task<Dictionary<string, object>> SdkDevice(IIpc sdk)
+    {
+        var response = await sdk.Request("devicespace_sdk_ipc", "get_device_list", null, 1500).ConfigureAwait(false);
+        if (!(Json.Get(response, "data") is object[])) throw new IOException("OPPO 互联设备列表格式异常。");
+        var phones = Json.List(Json.Get(response, "data")).Select(Json.Map).Where(d => Json.Get(d, "is_connected") is bool && (bool)Json.Get(d, "is_connected") && Json.Number(Json.Get(d, "device_type"), -1) == 8 && Json.Text(Json.Get(d, "device_id")).Length > 0).ToArray();
+        if (phones.Length > 1) throw new IOException("检测到多台已连接手机，请仅连接一台后重试。");
+        return phones.Length == 1 ? phones[0] : null;
+    }
+    internal static async Task<Dictionary<string, object>> QuerySdkConnection(IIpc sdk)
+    {
+        try {
+            var phone = await SdkDevice(sdk).ConfigureAwait(false);
+            if (phone == null) return Json.Fields("phase", "disconnected");
+            string name = Json.Text(Json.Get(phone, "device_name"));
+            var result = Json.Fields("phase", "connected", "phone", name.Length == 0 ? "手机" : name, "method", "连接方式未知");
+            try {
+                var info = Json.Map(Json.Get(await sdk.Request("devicespace_sdk_ipc", "get_screen_share_info", Json.Fields("device_id", Json.Get(phone, "device_id")), 1200).ConfigureAwait(false), "data"));
+                result["shareStatus"] = Json.Number(Json.Get(info, "screen_share_status"), -1);
+                result["shareMode"] = Json.Number(Json.Get(info, "screen_share_mode"), -1);
+            } catch { /* 基础连接已确认，共享状态查询失败不能视为断连。 */ }
+            return result;
+        } catch { return Json.Fields("phase", "unavailable"); }
+    }
+    internal static async Task<int> ShareSdk(int parent, string version)
+    {
+        var sdk = new ClientSdk();
+        var session = new SharingSession(sdk, new Dictionary<string, object>(), state => Json.Write(Path.Combine(Root, "state.json"), state), Preference());
+        string stop = Path.Combine(Root, "stop.request"), id = null;
+        bool ownSession = false;
+        try
+        {
+            session.Set("phase", "starting", "clientVersion", version, "clientVersionVerified", version == "17.100.10", "message", "正在请求 OPPO 互联共享…");
+            var phone = await SdkDevice(sdk).ConfigureAwait(false);
+            if (phone == null) throw new IOException("请先在 OPPO 互联中连接手机。");
+            id = Json.Text(Json.Get(phone, "device_id"));
+            session.Set("phone", Json.Text(Json.Get(phone, "device_name")));
+            var info = Json.Map(Json.Get(await sdk.Request("devicespace_sdk_ipc", "get_screen_share_info", Json.Fields("device_id", id), 2000).ConfigureAwait(false), "data"));
+            int status = Json.Number(Json.Get(info, "screen_share_status"), -1), mode = Json.Number(Json.Get(info, "screen_share_mode"), -1);
+            if (status < 0 || status > 2) throw new IOException("无法确认原厂协同状态。");
+            if (status != 0 && mode != 0) throw new IOException("其他屏幕协同模式正在运行，请先在 OPPO 互联中结束。");
+            bool requested = status == 1;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(25), nextCheck = DateTime.MinValue;
+            bool ready = false;
+            var edge = new EdgeTransition();
+            if (status == 0) session.Set("phase", "armed", "message", "鼠标移到屏幕左右外边缘即可开始协同。");
+            while (true)
+            {
+                if (File.Exists(stop) || (parent > 0 && !Alive(parent))) break;
+                if (DateTime.UtcNow >= nextCheck)
+                {
+                    phone = await SdkDevice(sdk).ConfigureAwait(false);
+                    if (phone == null || Json.Text(Json.Get(phone, "device_id")) != id) throw new IOException("手机已断开或连接设备已变化。");
+                    info = Json.Map(Json.Get(await sdk.Request("devicespace_sdk_ipc", "get_screen_share_info", Json.Fields("device_id", id), 2000).ConfigureAwait(false), "data"));
+                    status = Json.Number(Json.Get(info, "screen_share_status"), -1); mode = Json.Number(Json.Get(info, "screen_share_mode"), -1);
+                    if (status == 2 && mode == 0) { if (!ready) session.Set("phase", "ready", "message", "键鼠共享已开启；方向在 OPPO 互联中设置。"); ready = true; }
+                    else if (ready) throw new IOException("原厂键鼠共享已停止或模式已变化。");
+                    else if (status != 0 && mode != 0) throw new IOException("其他屏幕协同模式正在运行，请先在 OPPO 互联中结束。");
+                    else if (status < 0 || status > 2) throw new IOException("无法确认原厂协同状态。");
+                    else if (status == 1 && !requested) { requested = true; deadline = DateTime.UtcNow.AddSeconds(25); }
+                    nextCheck = DateTime.UtcNow.AddSeconds(2);
+                }
+                if (!ready && requested && DateTime.UtcNow > deadline) throw new IOException("等待原厂键鼠共享超时，请检查手机或 OPPO 互联提示。");
+                if (!ready && !requested)
+                {
+                    bool atEdge;
+                    if (!ScreenEdge.TryAtOuterEdge(out atEdge)) throw new IOException("无法读取光标位置，请检查 Windows 会话。");
+                    if (edge.Observe(atEdge))
+                    {
+                        session.Set("phase", "starting", "message", "正在与手机建立协同…");
+                        await sdk.Request("devicespace_sdk_ipc", "start_screen_share", Json.Fields("device_id", id, "share_mode", 0), 2000).ConfigureAwait(false);
+                        ownSession = true; requested = true; deadline = DateTime.UtcNow.AddSeconds(25); nextCheck = DateTime.MinValue;
+                    }
+                }
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+            // 只停止由本助手启动的会话，避免关闭用户已经在原厂界面开启的会话。
+            if ((ownSession || (File.Exists(stop) && status != 0)) && id != null)
+            {
+                session.Set("phase", "stopping", "message", "正在等待 OPPO 互联停止共享…");
+                await sdk.Request("devicespace_sdk_ipc", "stop_screen_share", Json.Fields("device_id", id), 2000).ConfigureAwait(false);
+                DateTime stopDeadline = DateTime.UtcNow.AddSeconds(10);
+                do {
+                    await Task.Delay(300).ConfigureAwait(false);
+                    info = Json.Map(Json.Get(await sdk.Request("devicespace_sdk_ipc", "get_screen_share_info", Json.Fields("device_id", id), 2000).ConfigureAwait(false), "data"));
+                    status = Json.Number(Json.Get(info, "screen_share_status"), -1);
+                    if (status == 0) break;
+                } while (DateTime.UtcNow < stopDeadline);
+                if (status != 0) throw new IOException("OPPO 互联尚未确认共享停止，请检查原厂界面。");
+            }
+        }
+        catch (Exception error) { session.Stop(error is IOException || error is TimeoutException ? error.Message : "新版共享出现异常。"); }
+        finally
+        {
+            if (session.Failure != null && ownSession && id != null)
+            {
+                try { sdk.Request("devicespace_sdk_ipc", "stop_screen_share", Json.Fields("device_id", id), 1500).GetAwaiter().GetResult(); } catch { }
+            }
+            try { if (File.Exists(stop)) File.Delete(stop); } catch { }
+            session.Set("phase", session.Failure == null ? "stopped" : "error", "message", session.Failure ?? "已停止。");
+        }
+        return 0;
+    }
     internal static string FindClientInstall()
     {
         var processes = Process.GetProcessesByName("O+Connect");
@@ -370,7 +555,10 @@ internal static class Backend
         var ipc = new PipeHttp();
         while (Alive(parent))
         {
-            var state = await QueryConnection(ipc).ConfigureAwait(false);
+            string version = "";
+            try { version = InstalledVersion(Path.Combine(FindClientInstall(), "resources", "app.asar")); } catch { }
+            var state = UseClientSdk(version) ? await QuerySdkConnection(new ClientSdk()).ConfigureAwait(false) : await QueryConnection(ipc).ConfigureAwait(false);
+            state["clientVersion"] = version; state["clientMode"] = UseClientSdk(version) ? "sdk" : "legacy";
             state["watcherPid"] = Process.GetCurrentProcess().Id; state["updated"] = DateTime.UtcNow.ToString("o");
             Json.Write(Path.Combine(Root, "connection.json"), state);
             await Task.Delay(2000).ConfigureAwait(false);
@@ -380,6 +568,10 @@ internal static class Backend
     internal static async Task<int> Share(int parent)
     {
         Directory.CreateDirectory(Root);
+        try {
+            string detected = InstalledVersion(Path.Combine(FindClientInstall(), "resources", "app.asar"));
+            if (UseClientSdk(detected)) return await ShareSdk(parent, detected).ConfigureAwait(false);
+        } catch { /* 旧版路径保留原有错误处理。 */ }
         var ipc = new PipeHttp();
         var parameters = new Dictionary<string, object>();
         var session = new SharingSession(ipc, parameters, state => Json.Write(Path.Combine(Root, "state.json"), state), Preference());
