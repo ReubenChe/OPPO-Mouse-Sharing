@@ -488,8 +488,8 @@ public static class OppoEdgeWindow {
         $effect.Width = $size.X; $effect.Height = $thickness
         if ($direction -eq 'bottom') { $effect.Top = $origin.Y + $size.Y - $thickness }
     }
-    $animation = [Windows.Media.Animation.DoubleAnimation]::new(0.0, 1.0, [Windows.Duration]::new([TimeSpan]::FromMilliseconds(350)))
-    $animation.AutoReverse = $true; $animation.RepeatBehavior = [Windows.Media.Animation.RepeatBehavior]::new(3)
+    $animation = [Windows.Media.Animation.DoubleAnimation]::new(0.0, 1.0, [Windows.Duration]::new([TimeSpan]::FromTicks(4166667)))
+    $animation.AutoReverse = $true; $animation.RepeatBehavior = [Windows.Media.Animation.RepeatBehavior]::new([TimeSpan]::FromSeconds(3))
     $animation.Add_Completed({ $effect.Close() }.GetNewClosure())
     $effect.BeginAnimation([Windows.Window]::OpacityProperty, $animation)
 }
