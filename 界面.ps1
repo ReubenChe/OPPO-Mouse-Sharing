@@ -35,6 +35,10 @@ $script:trayMenu = $null
 $script:trayDrawingIcon = $null
 $script:updateCheckProcess = $null
 $script:updateMarker = $null
+$script:updateResultPending = $false
+$script:updateStatusMessage = ''
+$script:updateStatusError = $false
+$script:settingsDialog = $null
 $helperMutex = $null
 if (-not $ValidateOnly) {
     $mutexName = if ($Preview) { 'Local\OppoConnectKmsHelperPreview' } else { 'Local\OppoConnectKmsHelper16220' }
@@ -305,7 +309,8 @@ function Open-ProjectHome {
 function Start-UpdateCheck {
     if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { return }
     if (-not $env:OPPO_MOUSE_SHARING_LAUNCHER_PID -or -not (Test-Path -LiteralPath $helperExecutable)) {
-        [Windows.MessageBox]::Show('请通过打包后的 EXE 检查更新。', '软件更新') | Out-Null
+        $script:updateStatusMessage = '请通过打包后的 EXE 检查更新。'
+        $script:updateStatusError = $true
         return
     }
     $script:updateMarker = Join-Path $helperDataRoot ('update-ready-' + [Guid]::NewGuid().ToString('N'))
@@ -314,16 +319,48 @@ function Start-UpdateCheck {
     $info.Arguments = '--check-update "' + $script:updateMarker + '" ' + $env:OPPO_MOUSE_SHARING_LAUNCHER_PID + ' "' + $helperExecutable + '"'
     $info.UseShellExecute = $false; $info.CreateNoWindow = $true
     $script:updateCheckProcess = [Diagnostics.Process]::Start($info)
+    $script:updateResultPending = $true
+    $script:updateStatusMessage = ''
+    $script:updateStatusError = $false
+}
+function Update-UpdateCheckDisplay($dialog) {
+    if (-not $dialog) { return }
+    $busy = [bool]($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited)
+    if (-not $busy -and $script:updateResultPending) {
+        $script:updateResultPending = $false
+        try {
+            $resultPath = $script:updateMarker + '.result'
+            $result = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            if ($result.status -notin @('ok','error') -or [string]::IsNullOrWhiteSpace($result.message)) { throw 'Invalid result' }
+            $script:updateStatusMessage = $result.message
+            $script:updateStatusError = $result.status -eq 'error'
+            Remove-Item -LiteralPath $resultPath -ErrorAction SilentlyContinue
+        } catch {
+            $script:updateStatusMessage = '检查更新未能完成，请重试。'
+            $script:updateStatusError = $true
+        }
+    }
+    $button = $dialog.FindName('CheckUpdateButton')
+    $button.IsEnabled = -not $busy
+    $button.Content = if ($busy) { '处理中…' } else { '检查更新' }
+    $dialog.FindName('UpdateProgress').Visibility = if ($busy -or $script:updateStatusMessage) { [Windows.Visibility]::Visible } else { [Windows.Visibility]::Collapsed }
+    $dialog.FindName('UpdateSpinner').Visibility = if ($busy) { [Windows.Visibility]::Visible } else { [Windows.Visibility]::Collapsed }
+    $status = $dialog.FindName('UpdateStatus')
+    $status.Text = if ($busy) { '正在检查或下载更新…' } else { $script:updateStatusMessage }
+    $status.Foreground = if (-not $busy -and $script:updateStatusError) { Brush '#BC3D3D' } else { Brush '#85888D' }
+    $status.Margin = if ($busy) { [Windows.Thickness]::new(9,0,0,0) } else { [Windows.Thickness]::new(0) }
 }
 function New-SettingsDialog {
     $dialog = New-StyledDialog 'settings.xaml'
     $dialog.FindName('CpuHint').Text = '当前本机处理器类型：[ ' + (Get-ProcessorVendor) + ' ]。也可在 Windows“设置 → 系统 → 关于”中查看。'
     try { $dialog.FindName('AppVersion').Text = 'v' + ([Version][Diagnostics.FileVersionInfo]::GetVersionInfo($helperExecutable).FileVersion).ToString(3) } catch { }
     $checkUpdate = ${function:Start-UpdateCheck}
+    $updateCheckDisplay = ${function:Update-UpdateCheckDisplay}
     $dialog.FindName('CheckUpdateButton').Add_Click({
-        try { & $checkUpdate; $dialog.Close() }
-        catch { [Windows.MessageBox]::Show('无法启动更新检查：' + $_.Exception.Message, '软件更新') | Out-Null }
+        try { & $checkUpdate; & $updateCheckDisplay $dialog }
+        catch { $script:updateStatusMessage = '无法启动更新检查：' + $_.Exception.Message; $script:updateStatusError = $true; & $updateCheckDisplay $dialog }
     }.GetNewClosure())
+    Update-UpdateCheckDisplay $dialog
     $openProjectHome = ${function:Open-ProjectHome}
     $dialog.FindName('GithubButton').Add_Click({
         try { & $openProjectHome }
@@ -356,11 +393,12 @@ function Show-SettingsDialog([bool]$showHelp = $false) {
     try {
         $script:settingsDialogVisible = $true
         $dialog = New-SettingsDialog
+        $script:settingsDialog = $dialog
         if ($showHelp) { $dialog.FindName('SettingsTabs').SelectedItem = $dialog.FindName('HelpTab') }
         $dialog.Owner = $window
         $dialog.ShowDialog() | Out-Null
     } catch { Show-HelperError '无法打开设置' $_ }
-    finally { $script:settingsDialogVisible = $false }
+    finally { $script:settingsDialog = $null; $script:settingsDialogVisible = $false }
 }
 function Show-FirstRunGuide {
     if ($script:guideShown -or $script:guideAttempted -or $ValidateOnly -or $script:helperClosing -or $script:settingsDialogVisible) { return }
@@ -575,12 +613,14 @@ $timer.Add_Tick({
         Remove-Item -LiteralPath $script:updateMarker -ErrorAction SilentlyContinue
         $script:updateMarker = $null
         $script:helperClosing = $true
+        if ($script:settingsDialog) { $script:settingsDialog.Close() }
         if ($script:helperProcess -and -not $script:helperProcess.HasExited) {
             [IO.File]::WriteAllText($helperStopPath, 'stop')
             $ShareButton.IsEnabled = $false; $StatusTitle.Text = '正在停止共享并更新…'
         } else { $window.Close() }
         return
     }
+    if ($script:settingsDialog) { Update-UpdateCheckDisplay $script:settingsDialog }
     Show-FirstRunGuide
     Update-Connection
     Update-TrayMenu

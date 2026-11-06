@@ -12,13 +12,13 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("OPPO 键鼠共享助手")]
 [assembly: AssemblyDescription("键鼠共享助手与 C# 原生后端")]
 [assembly: AssemblyProduct("OPPO Mouse Sharing")]
-[assembly: AssemblyVersion("1.4.5.0")]
-[assembly: AssemblyFileVersion("1.4.5.0")]
+[assembly: AssemblyVersion("1.4.8.0")]
+[assembly: AssemblyFileVersion("1.4.8.0")]
 
 internal static class Launcher
 {
     private static readonly string[] Files = {
-        "助手.ps1", "界面.ps1", "main.xaml", "close.xaml", "settings.xaml", "app.ico"
+        "助手.ps1", "界面.ps1", "main.xaml", "close.xaml", "settings.xaml", "update.xaml", "app.ico"
     };
     private static readonly string AppRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OPPO-Mouse-sharing");

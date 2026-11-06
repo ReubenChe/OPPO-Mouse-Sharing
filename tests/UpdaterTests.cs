@@ -14,9 +14,20 @@ internal static class UpdaterTests
         try { Updater.ParseRelease(value); } catch (IOException) { return; }
         throw new Exception("Invalid release was accepted.");
     }
+    [STAThread]
     private static int Main(string[] args)
     {
         try {
+            var confirmation = UpdateDialog.Create("发现新版本", "测试更新说明", true);
+            if (!confirmation.AllowsTransparency || ((System.Windows.Controls.Border)confirmation.Content).CornerRadius.TopLeft != 12)
+                throw new Exception("Update dialog must have transparent rounded corners.");
+            if (((System.Windows.Controls.Button)confirmation.FindName("ConfirmChoice")).Content.ToString() != "下载并安装" ||
+                ((System.Windows.Controls.Button)confirmation.FindName("CancelChoice")).Visibility != System.Windows.Visibility.Visible)
+                throw new Exception("Update confirmation controls are incorrect.");
+            var message = UpdateDialog.Create("软件更新", "测试错误信息", false);
+            if (((System.Windows.Controls.Button)message.FindName("CancelChoice")).Visibility != System.Windows.Visibility.Collapsed ||
+                ((System.Windows.Controls.TextBlock)message.FindName("DialogMessage")).Text != "测试错误信息")
+                throw new Exception("Update message controls are incorrect.");
             string tag = "v1.4.5", url = "https://github.com/ReubenChe/OPPO-Mouse-Sharing/releases/download/v1.4.5/OPPO-Mouse-sharing-v1.4.5.exe";
             string digest = "sha256:" + new String('a', 64);
             var release = Updater.ParseRelease(Fixture(tag, url, digest, 1024));

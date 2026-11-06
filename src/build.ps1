@@ -8,13 +8,14 @@ $payload = Join-Path $outputRoot 'payload.zip'
 $stream = [IO.File]::Open($payload, [IO.FileMode]::Create)
 $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
 try {
-    foreach ($name in @('助手.ps1', '界面.ps1', 'main.xaml', 'close.xaml', 'settings.xaml', 'app.ico')) {
+    foreach ($name in @('助手.ps1', '界面.ps1', 'main.xaml', 'close.xaml', 'settings.xaml', 'update.xaml', 'app.ico')) {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $root $name), $name, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
     }
 } finally { $archive.Dispose(); $stream.Dispose() }
 $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$wpf = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\WPF'
 $output = Join-Path $outputRoot 'OPPO-Mouse-sharing.exe'
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll "/win32manifest:$PSScriptRoot\app.manifest" "/win32icon:$root\app.ico" "/resource:$payload,payload.zip" "/out:$output" (Join-Path $PSScriptRoot 'Launcher.cs') (Join-Path $PSScriptRoot 'Backend.cs') (Join-Path $PSScriptRoot 'Updater.cs')
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.Xaml.dll /reference:System.IO.Compression.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll "/reference:$wpf\PresentationFramework.dll" "/reference:$wpf\PresentationCore.dll" "/reference:$wpf\WindowsBase.dll" "/win32manifest:$PSScriptRoot\app.manifest" "/win32icon:$root\app.ico" "/resource:$payload,payload.zip" "/resource:$root\main.xaml,update.main.xaml" "/resource:$root\update.xaml,update.dialog.xaml" "/resource:$root\app.ico,update.icon" "/out:$output" (Join-Path $PSScriptRoot 'Launcher.cs') (Join-Path $PSScriptRoot 'Backend.cs') (Join-Path $PSScriptRoot 'Updater.cs') (Join-Path $PSScriptRoot 'UpdateDialog.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Application compilation failed.' }
 $version = [Version][Diagnostics.FileVersionInfo]::GetVersionInfo($output).FileVersion
 $releaseOutput = Join-Path $outputRoot ('OPPO-Mouse-sharing-v' + $version.ToString(3) + '.exe')

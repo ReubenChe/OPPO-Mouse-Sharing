@@ -43,6 +43,11 @@
        <Button x:Name="CheckUpdateButton" Grid.Column="1" Content="检查更新" Style="{StaticResource SoftButton}" Padding="12,7" VerticalAlignment="Center"/>
       </Grid>
      </Border>
+     <Grid x:Name="UpdateProgress" Visibility="Collapsed" Margin="2,10,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <ProgressBar x:Name="UpdateSpinner" IsIndeterminate="True" Width="70" Height="4" Foreground="#0066FF" Background="#E2E8F0" BorderThickness="0" VerticalAlignment="Center"/>
+      <TextBlock x:Name="UpdateStatus" Grid.Column="1" Text="正在检查或下载更新…" TextWrapping="Wrap" FontSize="11" Foreground="#85888D" Margin="9,0,0,0" VerticalAlignment="Center"/>
+     </Grid>
      <TextBlock x:Name="SettingsFeedback" Text="设置自动保存" FontSize="11" Foreground="#85888D" Margin="1,12,1,8" TextWrapping="Wrap" />
     </StackPanel>
    </TabItem>
@@ -68,7 +73,7 @@
   <Grid Grid.Row="2" Margin="2,12,0,0">
    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <StackPanel VerticalAlignment="Center">
-    <TextBlock FontSize="12" Foreground="#3D424A"><Run x:Name="AppVersion" Text="v1.4.5" FontWeight="SemiBold"/><Run Text="    @Reuben"/><Run Text="    酷安 UID：32493969"/></TextBlock>
+    <TextBlock FontSize="12" Foreground="#3D424A"><Run x:Name="AppVersion" Text="v1.4.8" FontWeight="SemiBold"/><Run Text="    @Reuben"/><Run Text="    酷安 UID：32493969"/></TextBlock>
     <TextBlock Text="邮箱：reubenche@outlook.com" FontSize="11" Foreground="#85888D" Margin="0,7,0,0"/>
    </StackPanel>
    <Button x:Name="GithubButton" Grid.Column="1" Width="38" Height="38" VerticalAlignment="Center" Margin="8,0,10,0" Style="{StaticResource SoftButton}" Padding="5" ToolTip="打开 GitHub 项目主页" AutomationProperties.Name="打开 GitHub 项目主页">

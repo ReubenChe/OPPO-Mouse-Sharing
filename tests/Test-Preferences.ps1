@@ -169,6 +169,25 @@ try {
     Assert ($LASTEXITCODE -eq 0) 'Preferences did not survive a new UI process.'
 
     Assert (-not (Get-StartupEnabled)) 'Startup must initially be off in the isolated key.'
+    $originalUpdateCheck = ${function:Start-UpdateCheck}
+    function Start-UpdateCheck { $script:updateCheckProcess = [Diagnostics.Process]::Start($env:OPPO_MOUSE_SHARING_EXE) }
+    $updateView = New-SettingsDialog
+    $updateButton = $updateView.FindName('CheckUpdateButton')
+    $updateButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+    Assert (-not $updateButton.IsEnabled -and $updateView.FindName('UpdateProgress').Visibility -eq 'Visible') 'Update check did not show its loading state.'
+    $script:updateCheckProcess.Kill(); $script:updateCheckProcess.WaitForExit()
+    $script:updateMarker = Join-Path $testRoot 'update-test'
+    $script:updateResultPending = $true
+    [IO.File]::WriteAllText($script:updateMarker + '.result', '{"status":"ok","message":"Already current"}')
+    Update-UpdateCheckDisplay $updateView
+    Assert ($updateButton.IsEnabled -and $updateView.FindName('UpdateSpinner').Visibility -eq 'Collapsed' -and $updateView.FindName('UpdateStatus').Text -eq 'Already current') 'Update result was not shown in the loading area.'
+    $script:updateResultPending = $true
+    [IO.File]::WriteAllText($script:updateMarker + '.result', '{"status":"error","message":"Network failed"}')
+    Update-UpdateCheckDisplay $updateView
+    Assert ($updateView.FindName('UpdateStatus').Text -eq 'Network failed' -and $script:updateStatusError) 'Update error was not shown in the loading area.'
+    $script:updateCheckProcess.Dispose(); $script:updateCheckProcess = $null
+    $script:updateMarker = $null; $script:updateStatusMessage = ''; $script:updateStatusError = $false
+    Set-Item Function:Start-UpdateCheck $originalUpdateCheck
     $settingsView = New-SettingsDialog
     $startupControl = $settingsView.FindName('StartupSwitch')
     $startupControl.IsChecked = $true
