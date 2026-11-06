@@ -33,6 +33,8 @@ $script:warnedClientVersions = @()
 $script:trayIcon = $null
 $script:trayMenu = $null
 $script:trayDrawingIcon = $null
+$script:updateCheckProcess = $null
+$script:updateMarker = $null
 $helperMutex = $null
 if (-not $ValidateOnly) {
     $mutexName = if ($Preview) { 'Local\OppoConnectKmsHelperPreview' } else { 'Local\OppoConnectKmsHelper16220' }
@@ -300,9 +302,28 @@ function Get-ProcessorVendor {
 function Open-ProjectHome {
     Start-Process -FilePath 'https://github.com/ReubenChe/OPPO-Mouse-Sharing' -ErrorAction Stop | Out-Null
 }
+function Start-UpdateCheck {
+    if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { return }
+    if (-not $env:OPPO_MOUSE_SHARING_LAUNCHER_PID -or -not (Test-Path -LiteralPath $helperExecutable)) {
+        [Windows.MessageBox]::Show('请通过打包后的 EXE 检查更新。', '软件更新') | Out-Null
+        return
+    }
+    $script:updateMarker = Join-Path $helperDataRoot ('update-ready-' + [Guid]::NewGuid().ToString('N'))
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $helperExecutable
+    $info.Arguments = '--check-update "' + $script:updateMarker + '" ' + $env:OPPO_MOUSE_SHARING_LAUNCHER_PID + ' "' + $helperExecutable + '"'
+    $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+    $script:updateCheckProcess = [Diagnostics.Process]::Start($info)
+}
 function New-SettingsDialog {
     $dialog = New-StyledDialog 'settings.xaml'
     $dialog.FindName('CpuHint').Text = '当前本机处理器类型：[ ' + (Get-ProcessorVendor) + ' ]。也可在 Windows“设置 → 系统 → 关于”中查看。'
+    try { $dialog.FindName('AppVersion').Text = 'v' + ([Version][Diagnostics.FileVersionInfo]::GetVersionInfo($helperExecutable).FileVersion).ToString(3) } catch { }
+    $checkUpdate = ${function:Start-UpdateCheck}
+    $dialog.FindName('CheckUpdateButton').Add_Click({
+        try { & $checkUpdate; $dialog.Close() }
+        catch { [Windows.MessageBox]::Show('无法启动更新检查：' + $_.Exception.Message, '软件更新') | Out-Null }
+    }.GetNewClosure())
     $openProjectHome = ${function:Open-ProjectHome}
     $dialog.FindName('GithubButton').Add_Click({
         try { & $openProjectHome }
@@ -550,6 +571,16 @@ $window.Add_ContentRendered({ Complete-WindowStartup })
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(350)
 $timer.Add_Tick({
+    if ($script:updateMarker -and (Test-Path -LiteralPath $script:updateMarker)) {
+        Remove-Item -LiteralPath $script:updateMarker -ErrorAction SilentlyContinue
+        $script:updateMarker = $null
+        $script:helperClosing = $true
+        if ($script:helperProcess -and -not $script:helperProcess.HasExited) {
+            [IO.File]::WriteAllText($helperStopPath, 'stop')
+            $ShareButton.IsEnabled = $false; $StatusTitle.Text = '正在停止共享并更新…'
+        } else { $window.Close() }
+        return
+    }
     Show-FirstRunGuide
     Update-Connection
     Update-TrayMenu

@@ -14,6 +14,10 @@ try {
 } finally { $archive.Dispose(); $stream.Dispose() }
 $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $output = Join-Path $outputRoot 'OPPO-Mouse-sharing.exe'
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll "/win32manifest:$PSScriptRoot\app.manifest" "/win32icon:$root\app.ico" "/resource:$payload,payload.zip" "/out:$output" (Join-Path $PSScriptRoot 'Launcher.cs') (Join-Path $PSScriptRoot 'Backend.cs')
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.Core.dll /reference:System.Web.Extensions.dll "/win32manifest:$PSScriptRoot\app.manifest" "/win32icon:$root\app.ico" "/resource:$payload,payload.zip" "/out:$output" (Join-Path $PSScriptRoot 'Launcher.cs') (Join-Path $PSScriptRoot 'Backend.cs') (Join-Path $PSScriptRoot 'Updater.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Application compilation failed.' }
+$version = [Version][Diagnostics.FileVersionInfo]::GetVersionInfo($output).FileVersion
+$releaseOutput = Join-Path $outputRoot ('OPPO-Mouse-sharing-v' + $version.ToString(3) + '.exe')
+Copy-Item -LiteralPath $output -Destination $releaseOutput -Force
 Write-Output $output
+Write-Output $releaseOutput

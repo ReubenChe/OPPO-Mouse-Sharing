@@ -12,8 +12,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("OPPO 键鼠共享助手")]
 [assembly: AssemblyDescription("键鼠共享助手与 C# 原生后端")]
 [assembly: AssemblyProduct("OPPO Mouse Sharing")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.4.5.0")]
+[assembly: AssemblyFileVersion("1.4.5.0")]
 
 internal static class Launcher
 {
@@ -28,6 +28,8 @@ internal static class Launcher
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--check-update") return Updater.Check(args);
+        if (args.Length > 0 && args[0] == "--apply-update") return Updater.Apply(args);
         if (args.Length > 0 && (args[0] == "--backend" || args[0] == "--connection-watch" || args[0] == "--connection-once" || args[0].StartsWith("--fixture-")))
         {
             try
@@ -154,6 +156,7 @@ internal static class Launcher
         info.WindowStyle = ProcessWindowStyle.Hidden;
         info.EnvironmentVariables["OPPO_MOUSE_SHARING_DATA"] = data;
         info.EnvironmentVariables["OPPO_MOUSE_SHARING_EXE"] = Application.ExecutablePath;
+        info.EnvironmentVariables["OPPO_MOUSE_SHARING_LAUNCHER_PID"] = Process.GetCurrentProcess().Id.ToString();
         return info;
     }
 
