@@ -20,6 +20,10 @@ $script:startupShareRequested = [bool]$StartSharing
 $script:startupTrayRequested = [bool]$StartInTray
 $script:closeToTray = $false
 $script:autoShareOnConnect = $false
+$script:autoCheckUpdates = $false
+$script:updateAvailable = $false
+$script:updateCheckBackground = $false
+$script:nextAutoUpdateCheck = [DateTime]::UtcNow.AddSeconds(8)
 $script:autoShareAttempted = $false
 $script:connectionPhase = 'unavailable'
 $script:clientMode = 'legacy'
@@ -53,6 +57,7 @@ try {
     if ($saved.direction -in @('left','right')) { $script:selectedDirection = $saved.direction }
     if ($saved.closeToTray -is [bool]) { $script:closeToTray = $saved.closeToTray }
     if ($saved.autoShareOnConnect -is [bool]) { $script:autoShareOnConnect = $saved.autoShareOnConnect }
+    if ($saved.autoCheckUpdates -is [bool]) { $script:autoCheckUpdates = $saved.autoCheckUpdates }
     if ($saved.guideShown -is [bool]) { $script:guideShown = $saved.guideShown }
     $script:warnedClientVersions = @($saved.warnedClientVersions | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
 } catch {}
@@ -65,7 +70,7 @@ if (Test-Path -LiteralPath (Join-Path $helperRoot 'app.ico')) {
     $window.Icon = $script:brandSource
     $window.FindName('BrandMark').Source = $script:brandSource
 }
-foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','DirectionControls','LegacyDiagram','SdkOverview','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','OpenClientSharingButton','DirectionHint','SettingsButton','AutoShareSwitch')) {
+foreach ($name in @('StatusDot','StatusTitle','StatusDetail','ConnectionDot','ConnectionTitle','ConnectionDetail','DeviceCard','DeviceName','DeviceMethod','HeaderStatus','DeviceLayout','DirectionControls','LegacyDiagram','SdkOverview','LeftButton','RightButton','PhoneFrame','PhoneCaption','Connector','ShareButton','OpenClientSharingButton','DirectionHint','SettingsButton','SettingsUpdateDot','AutoShareSwitch')) {
     Set-Variable -Name $name -Value $window.FindName($name)
 }
 function Brush([string]$color) { return [Windows.Media.BrushConverter]::new().ConvertFromString($color) }
@@ -237,7 +242,7 @@ function Update-AutoSharing([string]$phase) {
 function Save-Settings([string]$direction, [bool]$closeToTray, [bool]$autoShareOnConnect = $script:autoShareOnConnect) {
     $temporary = $helperSettingsPath + '.tmp'
     $backup = $helperSettingsPath + '.bak'
-    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; autoShareOnConnect = $autoShareOnConnect; guideShown = $script:guideShown; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($temporary, (@{ direction = $direction; closeToTray = $closeToTray; autoShareOnConnect = $autoShareOnConnect; autoCheckUpdates = $script:autoCheckUpdates; guideShown = $script:guideShown; warnedClientVersions = @($script:warnedClientVersions) } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     if ([IO.File]::Exists($helperSettingsPath)) {
         [IO.File]::Replace($temporary, $helperSettingsPath, $backup)
         try { [IO.File]::Delete($backup) } catch {}
@@ -306,40 +311,61 @@ function Get-ProcessorVendor {
 function Open-ProjectHome {
     Start-Process -FilePath 'https://github.com/ReubenChe/OPPO-Mouse-Sharing' -ErrorAction Stop | Out-Null
 }
-function Start-UpdateCheck {
+function Set-AutoUpdatePreference([bool]$enabled) {
+    $previous = $script:autoCheckUpdates
+    $script:autoCheckUpdates = $enabled
+    try { Save-Settings $script:selectedDirection $script:closeToTray }
+    catch { $script:autoCheckUpdates = $previous; throw }
+    if ($enabled) { $script:nextAutoUpdateCheck = [DateTime]::MinValue }
+    else { $script:updateAvailable = $false; $SettingsUpdateDot.Visibility = [Windows.Visibility]::Collapsed }
+}
+function Start-UpdateCheck([bool]$background = $false) {
     if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { return }
+    Complete-UpdateCheck
     if (-not $env:OPPO_MOUSE_SHARING_LAUNCHER_PID -or -not (Test-Path -LiteralPath $helperExecutable)) {
-        $script:updateStatusMessage = '请通过打包后的 EXE 检查更新。'
-        $script:updateStatusError = $true
+        if (-not $background) { $script:updateStatusMessage = '请通过打包后的 EXE 检查更新。'; $script:updateStatusError = $true }
         return
     }
     $script:updateMarker = Join-Path $helperDataRoot ('update-ready-' + [Guid]::NewGuid().ToString('N'))
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $helperExecutable
     $info.Arguments = '--check-update "' + $script:updateMarker + '" ' + $env:OPPO_MOUSE_SHARING_LAUNCHER_PID + ' "' + $helperExecutable + '"'
+    if ($background) { $info.Arguments += ' --background' }
     $info.UseShellExecute = $false; $info.CreateNoWindow = $true
     $script:updateCheckProcess = [Diagnostics.Process]::Start($info)
+    $script:updateCheckBackground = $background
     $script:updateResultPending = $true
     $script:updateStatusMessage = ''
     $script:updateStatusError = $false
 }
-function Update-UpdateCheckDisplay($dialog) {
-    if (-not $dialog) { return }
+function Complete-UpdateCheck {
     $busy = [bool]($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited)
     if (-not $busy -and $script:updateResultPending) {
         $script:updateResultPending = $false
         try {
             $resultPath = $script:updateMarker + '.result'
             $result = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
-            if ($result.status -notin @('ok','error') -or [string]::IsNullOrWhiteSpace($result.message)) { throw 'Invalid result' }
-            $script:updateStatusMessage = $result.message
-            $script:updateStatusError = $result.status -eq 'error'
+            if ($result.status -notin @('ok','error','current','available','cancelled') -or [string]::IsNullOrWhiteSpace($result.message)) { throw 'Invalid result' }
+            if (-not $script:updateCheckBackground -or $script:autoCheckUpdates) {
+                if ($result.status -in @('available','cancelled')) { $script:updateAvailable = $true }
+                elseif ($result.status -eq 'current') { $script:updateAvailable = $false }
+            }
+            if (-not $script:updateCheckBackground) {
+                $script:updateStatusMessage = $result.message
+                $script:updateStatusError = $result.status -eq 'error'
+            }
             Remove-Item -LiteralPath $resultPath -ErrorAction SilentlyContinue
         } catch {
-            $script:updateStatusMessage = '检查更新未能完成，请重试。'
-            $script:updateStatusError = $true
+            if (-not $script:updateCheckBackground) { $script:updateStatusMessage = '检查更新未能完成，请重试。'; $script:updateStatusError = $true }
         }
     }
+    $SettingsUpdateDot.Visibility = if ($script:updateAvailable) { [Windows.Visibility]::Visible } else { [Windows.Visibility]::Collapsed }
+}
+function Update-UpdateCheckDisplay($dialog) {
+    if (-not $dialog) { return }
+    Complete-UpdateCheck
+    $busy = [bool]($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited)
+    $dialog.FindName('CheckUpdateDot').Visibility = if ($script:updateAvailable) { [Windows.Visibility]::Visible } else { [Windows.Visibility]::Collapsed }
     $button = $dialog.FindName('CheckUpdateButton')
     $button.IsEnabled = -not $busy
     $button.Content = if ($busy) { '处理中…' } else { '检查更新' }
@@ -359,6 +385,14 @@ function New-SettingsDialog {
     $dialog.FindName('CheckUpdateButton').Add_Click({
         try { & $checkUpdate; & $updateCheckDisplay $dialog }
         catch { $script:updateStatusMessage = '无法启动更新检查：' + $_.Exception.Message; $script:updateStatusError = $true; & $updateCheckDisplay $dialog }
+    }.GetNewClosure())
+    $autoUpdate = $dialog.FindName('AutoUpdateCheckBox')
+    $autoUpdate.IsChecked = $script:autoCheckUpdates
+    $setAutoUpdate = ${function:Set-AutoUpdatePreference}
+    $autoUpdate.Add_Click({
+        $enabled = $autoUpdate.IsChecked -eq $true
+        try { & $setAutoUpdate $enabled; & $updateCheckDisplay $dialog }
+        catch { $autoUpdate.IsChecked = -not $enabled; $script:updateStatusMessage = '无法保存自动检查设置：' + $_.Exception.Message; $script:updateStatusError = $true; & $updateCheckDisplay $dialog }
     }.GetNewClosure())
     Update-UpdateCheckDisplay $dialog
     $openProjectHome = ${function:Open-ProjectHome}
@@ -619,6 +653,11 @@ $timer.Add_Tick({
             $ShareButton.IsEnabled = $false; $StatusTitle.Text = '正在停止共享并更新…'
         } else { $window.Close() }
         return
+    }
+    Complete-UpdateCheck
+    if ($script:autoCheckUpdates -and -not $script:helperClosing -and -not $ValidateOnly -and [DateTime]::UtcNow -ge $script:nextAutoUpdateCheck -and (-not $script:updateCheckProcess -or $script:updateCheckProcess.HasExited)) {
+        $script:nextAutoUpdateCheck = [DateTime]::UtcNow.AddHours(24)
+        try { Start-UpdateCheck $true } catch { }
     }
     if ($script:settingsDialog) { Update-UpdateCheckDisplay $script:settingsDialog }
     Show-FirstRunGuide

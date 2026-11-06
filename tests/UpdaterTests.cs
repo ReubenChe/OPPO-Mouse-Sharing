@@ -50,6 +50,15 @@ internal static class UpdaterTests
             if (Updater.ParseReleaseNotes("<div data-test-selector='body-content'></div>") != "暂无更新说明。") throw new Exception("Empty release notes were not handled.");
             if (!Updater.ParseReleaseNotes("<p>changed layout</p>").Contains("GitHub Releases")) throw new Exception("Missing release notes must provide a fallback.");
             string directory = Path.GetDirectoryName(args[0]);
+            string checkMarker = Path.Combine(directory, "background-check");
+            var future = new Updater.Release { Version = new Version(99, 0, 0), Tag = "v99.0.0" };
+            if (Updater.Check(new[] { "--check-update", checkMarker, "0", args[0], "--background" }, () => future) != 0 ||
+                Json.Text(Json.Get(Json.Read(checkMarker + ".result"), "status")) != "available")
+                throw new Exception("Background checking did not report an available version without a dialog.");
+            var current = new Updater.Release { Version = new Version(0, 0, 0), Tag = "v0.0.0" };
+            if (Updater.Check(new[] { "--check-update", checkMarker, "0", args[0], "--background" }, () => current) != 0 ||
+                Json.Text(Json.Get(Json.Read(checkMarker + ".result"), "status")) != "current")
+                throw new Exception("Background checking did not report a current version.");
             string target = Path.Combine(directory, "target.exe");
             File.WriteAllText(target, "old executable");
             if (Updater.Apply(new[] { "--apply-update", Int32.MaxValue.ToString(), target, args[0] }) != 0)

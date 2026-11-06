@@ -161,11 +161,16 @@ internal static class Updater
     private static void Error(string message) { UpdateDialog.Show("软件更新", message, false); }
     internal static int Check(string[] args)
     {
+        return Check(args, null);
+    }
+    internal static int Check(string[] args, Func<Release> getRelease)
+    {
         string folder = null;
-        string marker = args.Length == 4 ? args[1] : null;
+        string marker = args.Length == 4 || args.Length == 5 ? args[1] : null;
         try
         {
-            if (args.Length != 4) throw new IOException("更新参数无效。");
+            if (args.Length != 4 && !(args.Length == 5 && args[4] == "--background")) throw new IOException("更新参数无效。");
+            bool background = args.Length == 5;
             int parent = Int32.Parse(args[2]);
             string target = Path.GetFullPath(args[3]);
             marker = Path.GetFullPath(marker);
@@ -175,15 +180,16 @@ internal static class Updater
                 client.Encoding = Encoding.UTF8;
                 client.Headers.Add("User-Agent", "OPPO-Mouse-sharing-updater");
                 client.Headers.Add("Accept", "application/vnd.github+json");
-                var release = GetLatest(client);
+                var release = getRelease == null ? GetLatest(client) : getRelease();
                 Version current = Assembly.GetExecutingAssembly().GetName().Version;
                 if (release.Version.CompareTo(new Version(current.Major, current.Minor, current.Build)) <= 0)
                 {
-                    Json.Write(marker + ".result", Json.Fields("status", "ok", "message", "当前已是最新版本（v" + current.ToString(3) + "）。")); return 0;
+                    Json.Write(marker + ".result", Json.Fields("status", "current", "message", "当前已是最新版本（v" + current.ToString(3) + "）。")); return 0;
                 }
+                if (background) { Json.Write(marker + ".result", Json.Fields("status", "available", "message", "发现新版本 " + release.Tag)); return 0; }
                 string notes = release.Notes.Length > 1200 ? release.Notes.Substring(0, 1200) + "…" : release.Notes;
                 string question = "发现新版本 " + release.Tag + "（当前 v" + current.ToString(3) + "）\n\n" + notes;
-                if (!UpdateDialog.Show("发现新版本", question, true)) { Json.Write(marker + ".result", Json.Fields("status", "ok", "message", "已取消更新。")); return 0; }
+                if (!UpdateDialog.Show("发现新版本", question, true)) { Json.Write(marker + ".result", Json.Fields("status", "cancelled", "message", "已取消更新。")); return 0; }
                 folder = Path.Combine(Path.GetTempPath(), "oppo-update-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(folder);
                 string download = Path.Combine(folder, "download.exe");

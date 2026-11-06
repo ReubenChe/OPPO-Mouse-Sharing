@@ -146,6 +146,7 @@
     <Ellipse Canvas.Left="8" Canvas.Top="8" Width="8" Height="8" Stroke="#65696F" StrokeThickness="1.6" />
    </Canvas></Viewbox>
   </Button>
+  <Ellipse x:Name="SettingsUpdateDot" Grid.Row="0" Width="9" Height="9" HorizontalAlignment="Right" VerticalAlignment="Top" Fill="#E54747" Stroke="White" StrokeThickness="1.5" Visibility="Collapsed" IsHitTestVisible="False" ToolTip="有新版本可用"/>
   <Grid Grid.Row="3" Margin="2,12,2,0" VerticalAlignment="Center">
    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="连接设备后自动共享" FontSize="12" Foreground="#3D424A" /><TextBlock Text="检测到连接时启用" FontSize="11" Foreground="#85888D" Margin="12,1,0,0" /></StackPanel>

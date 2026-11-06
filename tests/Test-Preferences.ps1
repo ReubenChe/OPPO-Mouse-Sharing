@@ -29,6 +29,7 @@ try {
     $ValidateOnly = $false
 
     Assert (-not $script:autoShareOnConnect) 'Automatic sharing must default to off.'
+    Assert (-not $script:autoCheckUpdates) 'Automatic update checks must default to off.'
     Initialize-Tray
     $menuTexts = @($script:trayMenu.Items | ForEach-Object { $_.Text })
     Assert (($menuTexts -contains '打开 OPPO 互联屏幕协同设置') -and ($menuTexts -notcontains '手机在左侧') -and ($menuTexts -notcontains '手机在右侧')) 'Tray menu entries are incorrect.'
@@ -169,6 +170,16 @@ try {
     Assert ($LASTEXITCODE -eq 0) 'Preferences did not survive a new UI process.'
 
     Assert (-not (Get-StartupEnabled)) 'Startup must initially be off in the isolated key.'
+    $autoUpdateView = New-SettingsDialog
+    $autoUpdate = $autoUpdateView.FindName('AutoUpdateCheckBox')
+    $autoUpdate.IsChecked = $true
+    $autoUpdate.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+    Assert ($script:autoCheckUpdates -and ((Get-Content -LiteralPath $helperSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).autoCheckUpdates)) 'Automatic update preference did not persist.'
+    Save-Direction 'right'
+    Assert ((Get-Content -LiteralPath $helperSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).autoCheckUpdates) 'Saving another setting lost automatic update preference.'
+    $autoReloadCode = ". '" + (Join-Path $root '界面.ps1').Replace("'", "''") + "' -ValidateOnly; if (-not `$script:autoCheckUpdates -or -not (New-SettingsDialog).FindName('AutoUpdateCheckBox').IsChecked) { throw 'Auto update setting was not restored.' }"
+    & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -Command $autoReloadCode
+    Assert ($LASTEXITCODE -eq 0) 'Automatic update setting did not survive a restart.'
     $originalUpdateCheck = ${function:Start-UpdateCheck}
     function Start-UpdateCheck { $script:updateCheckProcess = [Diagnostics.Process]::Start($env:OPPO_MOUSE_SHARING_EXE) }
     $updateView = New-SettingsDialog
@@ -185,6 +196,15 @@ try {
     [IO.File]::WriteAllText($script:updateMarker + '.result', '{"status":"error","message":"Network failed"}')
     Update-UpdateCheckDisplay $updateView
     Assert ($updateView.FindName('UpdateStatus').Text -eq 'Network failed' -and $script:updateStatusError) 'Update error was not shown in the loading area.'
+    $script:updateCheckBackground = $true; $script:updateResultPending = $true
+    [IO.File]::WriteAllText($script:updateMarker + '.result', '{"status":"available","message":"New version"}')
+    Update-UpdateCheckDisplay $updateView
+    Assert ($script:updateAvailable -and $SettingsUpdateDot.Visibility -eq 'Visible' -and $updateView.FindName('CheckUpdateDot').Visibility -eq 'Visible') 'Background update did not show both dots.'
+    $script:updateResultPending = $true
+    [IO.File]::WriteAllText($script:updateMarker + '.result', '{"status":"current","message":"Current"}')
+    Update-UpdateCheckDisplay $updateView
+    Assert (-not $script:updateAvailable -and $SettingsUpdateDot.Visibility -eq 'Collapsed' -and $updateView.FindName('CheckUpdateDot').Visibility -eq 'Collapsed') 'Current version did not clear update dots.'
+    $script:updateCheckBackground = $false
     $script:updateCheckProcess.Dispose(); $script:updateCheckProcess = $null
     $script:updateMarker = $null; $script:updateStatusMessage = ''; $script:updateStatusError = $false
     Set-Item Function:Start-UpdateCheck $originalUpdateCheck
