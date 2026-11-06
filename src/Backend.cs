@@ -8,7 +8,6 @@ using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Net;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -222,43 +221,6 @@ internal sealed class ClientSdk : IIpc
     }
 }
 
-// 只观察光标位置，不安装钩子、不拦截或修改用户输入。
-internal sealed class EdgeTransition
-{
-    private bool initialized, wasAtEdge;
-    internal bool Observe(bool atEdge)
-    {
-        if (!initialized) { initialized = true; wasAtEdge = atEdge; return false; }
-        bool entered = atEdge && !wasAtEdge; wasAtEdge = atEdge; return entered;
-    }
-}
-internal static class ScreenEdge
-{
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Point { public int X, Y; }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Rect { public int Left, Top, Right, Bottom; }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MonitorInfo { public int Size; public Rect Monitor, Work; public int Flags; }
-    [DllImport("user32.dll")] private static extern bool GetCursorPos(out Point point);
-    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(Point point, uint flags);
-    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
-    internal static bool TryAtOuterEdge(out bool atEdge)
-    {
-        atEdge = false;
-        Point point;
-        if (!GetCursorPos(out point)) return false;
-        IntPtr monitor = MonitorFromPoint(point, 2);
-        var info = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
-        if (monitor == IntPtr.Zero || !GetMonitorInfo(monitor, ref info)) return false;
-        if (point.X <= info.Monitor.Left + 1)
-            atEdge = MonitorFromPoint(new Point { X = info.Monitor.Left - 1, Y = point.Y }, 0) == IntPtr.Zero;
-        else if (point.X >= info.Monitor.Right - 2)
-            atEdge = MonitorFromPoint(new Point { X = info.Monitor.Right, Y = point.Y }, 0) == IntPtr.Zero;
-        return true;
-    }
-}
-
 // 所有共享状态转换都在后端事件循环中串行执行。
 // 仅传输层可替换，便于测试复用同一套状态机。
 internal sealed class SharingSession
@@ -365,6 +327,17 @@ internal static class Backend
             return result;
         } catch { return Json.Fields("phase", "unavailable"); }
     }
+    internal static string SdkDirection(string configPath, string deviceId)
+    {
+        try {
+            var config = Json.Read(configPath);
+            var devices = Json.Map(Json.Get(config, "shareScreenDeviceMap"));
+            var device = Json.Map(Json.Get(devices, deviceId));
+            var value = Json.Get(device, "screenLocation");
+            if (!(value is int)) return null;
+            switch ((int)value) { case 0: return "right"; case 1: return "left"; case 2: return "top"; case 3: return "bottom"; default: return null; }
+        } catch { return null; }
+    }
     internal static async Task<int> ShareSdk(int parent, string version)
     {
         var sdk = new ClientSdk();
@@ -385,8 +358,12 @@ internal static class Backend
             bool requested = status == 1;
             DateTime deadline = DateTime.UtcNow.AddSeconds(25), nextCheck = DateTime.MinValue;
             bool ready = false;
-            var edge = new EdgeTransition();
-            if (status == 0) session.Set("phase", "armed", "message", "鼠标移到屏幕左右外边缘即可开始协同。");
+            if (status == 0 && !File.Exists(stop) && (parent <= 0 || Alive(parent)))
+            {
+                session.Set("phase", "starting", "message", "正在与手机建立协同…");
+                await sdk.Request("devicespace_sdk_ipc", "start_screen_share", Json.Fields("device_id", id, "share_mode", 0), 2000).ConfigureAwait(false);
+                ownSession = true; requested = true; deadline = DateTime.UtcNow.AddSeconds(25);
+            }
             while (true)
             {
                 if (File.Exists(stop) || (parent > 0 && !Alive(parent))) break;
@@ -396,7 +373,10 @@ internal static class Backend
                     if (phone == null || Json.Text(Json.Get(phone, "device_id")) != id) throw new IOException("手机已断开或连接设备已变化。");
                     info = Json.Map(Json.Get(await sdk.Request("devicespace_sdk_ipc", "get_screen_share_info", Json.Fields("device_id", id), 2000).ConfigureAwait(false), "data"));
                     status = Json.Number(Json.Get(info, "screen_share_status"), -1); mode = Json.Number(Json.Get(info, "screen_share_mode"), -1);
-                    if (status == 2 && mode == 0) { if (!ready) session.Set("phase", "ready", "message", "键鼠共享已开启；方向在 OPPO 互联中设置。"); ready = true; }
+                    if (status == 2 && mode == 0) {
+                        if (!ready) session.Set("phase", "ready", "sdkDirection", SdkDirection(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "O+Connect", "config.json"), id), "message", "键鼠共享已开启；方向在 OPPO 互联中设置。");
+                        ready = true;
+                    }
                     else if (ready) throw new IOException("原厂键鼠共享已停止或模式已变化。");
                     else if (status != 0 && mode != 0) throw new IOException("其他屏幕协同模式正在运行，请先在 OPPO 互联中结束。");
                     else if (status < 0 || status > 2) throw new IOException("无法确认原厂协同状态。");
@@ -404,17 +384,6 @@ internal static class Backend
                     nextCheck = DateTime.UtcNow.AddSeconds(2);
                 }
                 if (!ready && requested && DateTime.UtcNow > deadline) throw new IOException("等待原厂键鼠共享超时，请检查手机或 OPPO 互联提示。");
-                if (!ready && !requested)
-                {
-                    bool atEdge;
-                    if (!ScreenEdge.TryAtOuterEdge(out atEdge)) throw new IOException("无法读取光标位置，请检查 Windows 会话。");
-                    if (edge.Observe(atEdge))
-                    {
-                        session.Set("phase", "starting", "message", "正在与手机建立协同…");
-                        await sdk.Request("devicespace_sdk_ipc", "start_screen_share", Json.Fields("device_id", id, "share_mode", 0), 2000).ConfigureAwait(false);
-                        ownSession = true; requested = true; deadline = DateTime.UtcNow.AddSeconds(25); nextCheck = DateTime.MinValue;
-                    }
-                }
                 await Task.Delay(100).ConfigureAwait(false);
             }
             // 只停止由本助手启动的会话，避免关闭用户已经在原厂界面开启的会话。

@@ -15,6 +15,7 @@ $script:helperProcess = $null
 $script:helperClosing = $false
 $script:selectedDirection = 'right'
 $script:lastStateUpdate = ''
+$script:directionEffectShown = $false
 $script:startupShareRequested = [bool]$StartSharing
 $script:startupTrayRequested = [bool]$StartInTray
 $script:closeToTray = $false
@@ -441,6 +442,57 @@ function Choose-Direction([string]$direction) {
 Update-Direction $script:selectedDirection
 $LeftButton.Add_Click({ Choose-Direction 'left' })
 $RightButton.Add_Click({ Choose-Direction 'right' })
+function Show-DirectionEffect([string]$direction) {
+    if ($direction -notin @('left','right','top','bottom')) { return }
+    # 在光标所在显示器提示，窗口不接收鼠标或键盘输入。
+    if (-not ('OppoEdgeWindow' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class OppoEdgeWindow {
+    [DllImport("user32.dll", EntryPoint="GetWindowLong")] static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll", EntryPoint="SetWindowLong")] static extern int SetWindowLong(IntPtr h, int index, int value);
+    public static void MakeClickThrough(IntPtr h) { SetWindowLong(h, -20, GetWindowLong(h, -20) | 0x20 | 0x80 | 0x08000000); }
+}
+'@
+    }
+    $bounds = [Windows.Forms.Screen]::FromPoint([Windows.Forms.Cursor]::Position).Bounds
+    $effect = [Windows.Window]::new()
+    $effect.WindowStyle = [Windows.WindowStyle]::None; $effect.AllowsTransparency = $true
+    $effect.Background = [Windows.Media.Brushes]::Transparent; $effect.ShowInTaskbar = $false
+    $effect.ShowActivated = $false; $effect.Topmost = $true; $effect.ResizeMode = [Windows.ResizeMode]::NoResize
+    $effect.IsHitTestVisible = $false; $effect.SizeToContent = [Windows.SizeToContent]::Manual
+    $gradient = [Windows.Media.LinearGradientBrush]::new()
+    switch ($direction) {
+        'left' { $gradient.StartPoint = [Windows.Point]::new(0,0); $gradient.EndPoint = [Windows.Point]::new(1,0) }
+        'right' { $gradient.StartPoint = [Windows.Point]::new(1,0); $gradient.EndPoint = [Windows.Point]::new(0,0) }
+        'top' { $gradient.StartPoint = [Windows.Point]::new(0,0); $gradient.EndPoint = [Windows.Point]::new(0,1) }
+        'bottom' { $gradient.StartPoint = [Windows.Point]::new(0,1); $gradient.EndPoint = [Windows.Point]::new(0,0) }
+    }
+    $gradient.GradientStops.Add([Windows.Media.GradientStop]::new([Windows.Media.Color]::FromArgb(220,0,130,255),0))
+    $gradient.GradientStops.Add([Windows.Media.GradientStop]::new([Windows.Media.Color]::FromArgb(100,0,130,255),0.25))
+    $gradient.GradientStops.Add([Windows.Media.GradientStop]::new([Windows.Media.Colors]::Transparent,1))
+    $effect.Content = [Windows.Controls.Border]::new(); $effect.Content.Background = $gradient
+    $effect.Add_SourceInitialized({ [OppoEdgeWindow]::MakeClickThrough(([Windows.Interop.WindowInteropHelper]::new($effect)).Handle) }.GetNewClosure())
+    $effect.Left = $bounds.Left; $effect.Top = $bounds.Top; $effect.Width = 1; $effect.Height = 1
+    $effect.Show()
+    $transform = ([Windows.PresentationSource]::FromVisual($effect)).CompositionTarget.TransformFromDevice
+    $origin = $transform.Transform([Windows.Point]::new($bounds.Left, $bounds.Top))
+    $size = $transform.Transform([Windows.Point]::new($bounds.Width, $bounds.Height))
+    $thickness = 38.0
+    $effect.Left = $origin.X; $effect.Top = $origin.Y
+    if ($direction -in @('left','right')) {
+        $effect.Width = $thickness; $effect.Height = $size.Y
+        if ($direction -eq 'right') { $effect.Left = $origin.X + $size.X - $thickness }
+    } else {
+        $effect.Width = $size.X; $effect.Height = $thickness
+        if ($direction -eq 'bottom') { $effect.Top = $origin.Y + $size.Y - $thickness }
+    }
+    $animation = [Windows.Media.Animation.DoubleAnimation]::new(0.0, 1.0, [Windows.Duration]::new([TimeSpan]::FromMilliseconds(350)))
+    $animation.AutoReverse = $true; $animation.RepeatBehavior = [Windows.Media.Animation.RepeatBehavior]::new(3)
+    $animation.Add_Completed({ $effect.Close() }.GetNewClosure())
+    $effect.BeginAnimation([Windows.Window]::OpacityProperty, $animation)
+}
 function Toggle-Sharing {
     try {
     $script:autoShareAttempted = $true
@@ -473,7 +525,7 @@ function Toggle-Sharing {
     $startInfo.CreateNoWindow = $true
     $script:helperProcess = [Diagnostics.Process]::Start($startInfo)
     $StatusTitle.Text = '正在连接…'; $StatusDetail.Text = '请保持手机解锁。'
-    $ShareButton.Content = Get-StopSharingLabel; $script:lastStateUpdate = ''
+    $ShareButton.Content = Get-StopSharingLabel; $script:lastStateUpdate = ''; $script:directionEffectShown = $false
     } catch { Show-HelperError '共享操作失败' $_ }
 }
 $ShareButton.Add_Click({ Toggle-Sharing })
@@ -515,6 +567,10 @@ $timer.Add_Tick({
                     }
                     'ready' {
                         $StatusDot.Fill = Brush '#27A948'; $StatusTitle.Text = '正在共享'
+                        if ($script:clientMode -eq 'sdk' -and -not $script:directionEffectShown) {
+                            $script:directionEffectShown = $true
+                            try { Show-DirectionEffect $current.sdkDirection } catch { }
+                        }
                         $StatusDetail.Text = if ($script:clientMode -eq 'sdk') { '键鼠共享已开启。' } else { '从所选电脑边缘进入手机。' }
                         $ShareButton.Background = Brush '#30343B'; $ShareButton.BorderBrush = Brush '#30343B'
                     }

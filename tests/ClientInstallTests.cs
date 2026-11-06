@@ -54,8 +54,14 @@ internal static class ClientInstallTests
             try
             {
                 if (!Backend.UseClientSdk("17.100.10") || !Backend.UseClientSdk("17.100.10.0") || !Backend.UseClientSdk("17.100.11") || !Backend.UseClientSdk("17.101.0") || !Backend.UseClientSdk("18.0.0") || Backend.UseClientSdk("17.100.9") || Backend.UseClientSdk("16.2.20") || Backend.UseClientSdk("unknown") || Backend.UseClientSdk("17.100.10-beta")) throw new Exception("Client version routing changed unexpectedly.");
-                var edge = new EdgeTransition();
-                if (edge.Observe(true) || edge.Observe(true) || edge.Observe(false) || !edge.Observe(true) || edge.Observe(true)) throw new Exception("Edge trigger must require a fresh entry after arming and fire only once per entry.");
+                string config = Path.Combine(root, "config.json");
+                for (int location = 0; location < 4; location++) {
+                    File.WriteAllText(config, Json.Encode(Json.Fields("shareScreenDeviceMap", Json.Fields("phone", Json.Fields("screenLocation", location)))));
+                    if (Backend.SdkDirection(config, "phone") != new[] { "right", "left", "top", "bottom" }[location]) throw new Exception("Incorrect saved SDK direction.");
+                    if (Backend.SdkDirection(config, "other") != null) throw new Exception("Another device's direction must not be used.");
+                }
+                File.WriteAllText(config, "{}");
+                if (Backend.SdkDirection(config, "phone") != null || Backend.SdkDirection(config + ".missing", "phone") != null) throw new Exception("Missing direction must remain unknown.");
                 var sdk = new FakeSdk { Devices = new object[] { Json.Fields("device_type", 8, "is_connected", true, "device_id", "test", "device_name", "Test phone") } };
                 if (Json.Text(Backend.QuerySdkConnection(sdk).GetAwaiter().GetResult()["phase"]) != "connected") throw new Exception("Connected SDK phone not detected.");
                 sdk.Devices = new object[0];
