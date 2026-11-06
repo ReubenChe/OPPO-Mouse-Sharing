@@ -59,6 +59,42 @@ internal static class Updater
         if (links.Count != 1 || matches != 1) throw new IOException("发布页面没有符合要求的更新文件或 SHA-256 校验信息。请打开项目发布页面手动下载。");
         return new Release { Tag = tag, Version = version, Url = "https://github.com" + path, Digest = digest, Size = 0, Notes = "发布说明请查看项目的 GitHub Releases 页面。" };
     }
+    internal static string ParseReleaseNotes(string html)
+    {
+        const string unavailable = "发布说明请查看项目的 GitHub Releases 页面。";
+        if (String.IsNullOrEmpty(html)) return unavailable;
+        var opening = Regex.Match(html, @"<div\b(?=[^>]*\bdata-test-selector\s*=\s*['""]body-content['""])[^>]*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!opening.Success) return unavailable;
+        int start = opening.Index + opening.Length, depth = 1, end = -1;
+        foreach (Match tag in Regex.Matches(html.Substring(start), @"</?div\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            if (tag.Value.StartsWith("</", StringComparison.Ordinal)) depth--;
+            else if (!tag.Value.EndsWith("/>", StringComparison.Ordinal)) depth++;
+            if (depth == 0) { end = start + tag.Index; break; }
+        }
+        if (end < 0) return unavailable;
+        string content = html.Substring(start, end - start);
+        content = Regex.Replace(content, @"<(script|style|svg)\b[^>]*>[\s\S]*?</\1\s*>", "", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        content = Regex.Replace(content, @"<li\b[^>]*>", "\n• ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        content = Regex.Replace(content, @"<br\s*/?>|</(?:p|div|li|h[1-6]|ul|ol|pre|blockquote)\s*>", "\n", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        content = Regex.Replace(content, @"<[^>]*>", "", RegexOptions.CultureInvariant);
+        content = WebUtility.HtmlDecode(content).Replace('\u00a0', ' ');
+        content = Regex.Replace(content, @"[ \t]*\r?\n[ \t]*", "\n", RegexOptions.CultureInvariant);
+        content = Regex.Replace(content, @"\n{3,}", "\n\n", RegexOptions.CultureInvariant).Trim();
+        return content.Length == 0 ? "暂无更新说明。" : content;
+    }
+    private static Release GetLatestViaPage(TimedClient client)
+    {
+        string html = client.DownloadString("https://github.com/ReubenChe/OPPO-Mouse-Sharing/releases/latest");
+        var location = client.LastUri;
+        if (location == null || location.Scheme != "https" || location.Host != "github.com") throw new IOException("无法确认最新正式版的来源。");
+        var match = Regex.Match(location.AbsolutePath, @"^/ReubenChe/OPPO-Mouse-Sharing/releases/tag/(v\d+\.\d+\.\d+)$", RegexOptions.CultureInvariant);
+        if (!match.Success) throw new IOException("无法确认最新正式版的版本号。");
+        string tag = match.Groups[1].Value;
+        var release = ParseReleasePage(tag, client.DownloadString("https://github.com/ReubenChe/OPPO-Mouse-Sharing/releases/expanded_assets/" + tag));
+        release.Notes = ParseReleaseNotes(html);
+        return release;
+    }
     private static Release GetLatest(TimedClient client)
     {
         try { return ParseRelease(Json.Decode(client.DownloadString(Api))); }
@@ -67,13 +103,7 @@ internal static class Updater
             var response = error.Response as HttpWebResponse;
             if (response == null || (response.StatusCode != HttpStatusCode.Forbidden && (int)response.StatusCode != 429)) throw;
             response.Dispose();
-            client.DownloadString("https://github.com/ReubenChe/OPPO-Mouse-Sharing/releases/latest");
-            var location = client.LastUri;
-            if (location == null || location.Scheme != "https" || location.Host != "github.com") throw new IOException("无法确认最新正式版的来源。");
-            var match = Regex.Match(location.AbsolutePath, @"^/ReubenChe/OPPO-Mouse-Sharing/releases/tag/(v\d+\.\d+\.\d+)$", RegexOptions.CultureInvariant);
-            if (!match.Success) throw new IOException("无法确认最新正式版的版本号。");
-            string tag = match.Groups[1].Value;
-            return ParseReleasePage(tag, client.DownloadString("https://github.com/ReubenChe/OPPO-Mouse-Sharing/releases/expanded_assets/" + tag));
+            return GetLatestViaPage(client);
         }
     }
     internal static Release CheckReleaseLive()
@@ -84,6 +114,15 @@ internal static class Updater
             client.Headers.Add("User-Agent", "OPPO-Mouse-sharing-updater");
             client.Headers.Add("Accept", "application/vnd.github+json");
             return GetLatest(client);
+        }
+    }
+    internal static Release CheckReleasePageLive()
+    {
+        ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+        using (var client = new TimedClient()) {
+            client.Encoding = Encoding.UTF8;
+            client.Headers.Add("User-Agent", "OPPO-Mouse-sharing-updater");
+            return GetLatestViaPage(client);
         }
     }
     internal static Release ParseRelease(object raw)

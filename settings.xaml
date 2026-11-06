@@ -73,7 +73,7 @@
   <Grid Grid.Row="2" Margin="2,12,0,0">
    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <StackPanel VerticalAlignment="Center">
-    <TextBlock FontSize="12" Foreground="#3D424A"><Run x:Name="AppVersion" Text="v1.4.8" FontWeight="SemiBold"/><Run Text="    @Reuben"/><Run Text="    酷安 UID：32493969"/></TextBlock>
+    <TextBlock FontSize="12" Foreground="#3D424A"><Run x:Name="AppVersion" Text="v1.4.9" FontWeight="SemiBold"/><Run Text="    @Reuben"/><Run Text="    酷安 UID：32493969"/></TextBlock>
     <TextBlock Text="邮箱：reubenche@outlook.com" FontSize="11" Foreground="#85888D" Margin="0,7,0,0"/>
    </StackPanel>
    <Button x:Name="GithubButton" Grid.Column="1" Width="38" Height="38" VerticalAlignment="Center" Margin="8,0,10,0" Style="{StaticResource SoftButton}" Padding="5" ToolTip="打开 GitHub 项目主页" AutomationProperties.Name="打开 GitHub 项目主页">

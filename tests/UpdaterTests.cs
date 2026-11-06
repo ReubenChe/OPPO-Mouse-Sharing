@@ -44,6 +44,11 @@ internal static class UpdaterTests
             if (fallback.Version != new Version(1, 4, 5) || fallback.Digest != digest || fallback.Url != url)
                 throw new Exception("Rate-limit fallback did not preserve asset validation.");
             try { Updater.ParseReleasePage(tag, html.Replace(digest, "sha256:bad")); throw new Exception("Missing digest was accepted."); } catch (IOException) { }
+            string notes = Updater.ParseReleaseNotes("<div data-test-selector=\"body-content\"><h2>更新内容</h2><div><ul><li>修复 &amp; 改进</li><li>支持 <strong>中文</strong></li></ul></div></div><p>不属于正文</p>");
+            if (!notes.Contains("更新内容") || !notes.Contains("• 修复 & 改进") || !notes.Contains("• 支持 中文") || notes.Contains("不属于正文"))
+                throw new Exception("Release page notes were not extracted correctly: " + notes);
+            if (Updater.ParseReleaseNotes("<div data-test-selector='body-content'></div>") != "暂无更新说明。") throw new Exception("Empty release notes were not handled.");
+            if (!Updater.ParseReleaseNotes("<p>changed layout</p>").Contains("GitHub Releases")) throw new Exception("Missing release notes must provide a fallback.");
             string directory = Path.GetDirectoryName(args[0]);
             string target = Path.Combine(directory, "target.exe");
             File.WriteAllText(target, "old executable");
@@ -57,6 +62,9 @@ internal static class UpdaterTests
                 var live = Updater.CheckReleaseLive();
                 if (live.Digest == null || live.Url == null) throw new Exception("Live release is missing verified metadata.");
                 Console.WriteLine("PASS: live GitHub release " + live.Tag + " and SHA-256 metadata retrieved.");
+                var page = Updater.CheckReleasePageLive();
+                if (page.Notes.Contains("请查看项目的 GitHub Releases 页面")) throw new Exception("Live release notes were not extracted from the release page.");
+                Console.WriteLine("PASS: live release page notes retrieved for " + page.Tag + ".");
             }
             Console.WriteLine("PASS: release version, asset source, digest, size and prerelease validation.");
             Console.WriteLine("PASS: replacement installed and launched.");
